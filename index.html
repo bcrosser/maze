@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Maze</title>
+    <style>
+        body {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            background: #333;
+            font-family: Arial, sans-serif;
+        }
+        canvas {
+            border: 2px solid white;
+            background: white;
+        }
+        p {
+            color: white;
+            margin-top: 20px;
+        }
+        #level {
+            color: cyan;
+            font-weight: bold;
+            font-size: 18px;
+        }
+    </style>
+</head>
+<body>
+    <p id="level">Level: 1</p>
+    <canvas id="canvas"></canvas>
+    <p>Arrow keys to move</p>
+    <p id="message" style="color: lime; font-weight: bold;"></p>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        
+        const MAX_SIZE = 51;
+        const CELL_SIZE = 30;
+        let level = 1;
+        let size = 21;
+        let maze;
+        let playerX = 1, playerY = 1;
+        let lastMoveTime = 0;
+        const MOVE_DELAY = 100;
+        const keys = {};
+        let items = [];
+        let monsters = [];
+
+        function generateMaze() {
+            const grid = Array(size).fill(null).map(() => Array(size).fill(1));
+            
+            for (let y = 1; y < size; y += 2) {
+                for (let x = 1; x < size; x += 2) {
+                    grid[y][x] = 0;
+                }
+            }
+
+            const visited = new Set();
+            visited.add('1,1');
+            grid[1][1] = 0;
+
+            for (let y = 1; y < size; y += 2) {
+                for (let x = 1; x < size; x += 2) {
+                    if (visited.has(`${x},${y}`)) continue;
+
+                    let cx = x, cy = y;
+                    const path = [{x: cx, y: cy}];
+
+                    while (!visited.has(`${cx},${cy}`)) {
+                        const dirs = [];
+                        if (cx > 1) dirs.push({x: cx - 2, y: cy, dx: -1, dy: 0});
+                        if (cx < size - 2) dirs.push({x: cx + 2, y: cy, dx: 1, dy: 0});
+                        if (cy > 1) dirs.push({x: cx, y: cy - 2, dx: 0, dy: -1});
+                        if (cy < size - 2) dirs.push({x: cx, y: cy + 2, dx: 0, dy: 1});
+
+                        const next = dirs[Math.floor(Math.random() * dirs.length)];
+                        cx = next.x;
+                        cy = next.y;
+
+                        const idx = path.findIndex(p => p.x === cx && p.y === cy);
+                        if (idx !== -1) {
+                            path.length = idx + 1;
+                        } else {
+                            path.push({x: cx, y: cy, dx: next.dx, dy: next.dy});
+                        }
+                    }
+
+                    for (let i = 0; i < path.length; i++) {
+                        const cell = path[i];
+                        visited.add(`${cell.x},${cell.y}`);
+                        grid[cell.y][cell.x] = 0;
+
+                        if (i > 0) {
+                            const prev = path[i - 1];
+                            const wallX = (cell.x + prev.x) / 2;
+                            const wallY = (cell.y + prev.y) / 2;
+                            grid[wallY][wallX] = 0;
+                        }
+                    }
+                }
+            }
+
+            return grid;
+        }
+
+        function generateItems() {
+            items = [];
+            const itemCount = Math.floor(size / 5);
+            let placed = 0;
+
+            while (placed < itemCount) {
+                const x = Math.floor(Math.random() * size);
+                const y = Math.floor(Math.random() * size);
+
+                if (maze[y][x] === 0 && !(x === 1 && y === 1) && !(x === size - 2 && y === size - 2)) {
+                    items.push({x, y});
+                    placed++;
+                }
+            }
+        }
+
+        function generateMonsters() {
+            monsters = [];
+            const monsterCount = Math.floor(size / 4);
+            let placed = 0;
+
+            while (placed < monsterCount) {
+                const x = Math.floor(Math.random() * size);
+                const y = Math.floor(Math.random() * size);
+
+                if (maze[y][x] === 0 && !(x === 1 && y === 1) && !(x === size - 2 && y === size - 2)) {
+                    monsters.push({x, y});
+                    placed++;
+                }
+            }
+        }
+
+        function nextLevel() {
+            level++;
+            size = Math.min(size + 4, MAX_SIZE);
+            maze = generateMaze();
+            generateItems();
+            generateMonsters();
+            playerX = 1;
+            playerY = 1;
+            lastMoveTime = 0;
+            document.getElementById('level').textContent = `Level: ${level}`;
+            document.getElementById('message').textContent = '';
+            canvas.width = size * CELL_SIZE;
+            canvas.height = size * CELL_SIZE;
+        }
+
+        maze = generateMaze();
+        generateItems();
+        generateMonsters();
+        canvas.width = size * CELL_SIZE;
+        canvas.height = size * CELL_SIZE;
+
+        window.addEventListener('keydown', e => keys[e.key] = true);
+        window.addEventListener('keyup', e => keys[e.key] = false);
+
+        function gameLoop() {
+            const now = Date.now();
+            let moved = false;
+
+            if (now - lastMoveTime >= MOVE_DELAY) {
+                let newX = playerX, newY = playerY;
+
+                if (keys['ArrowUp'] || keys['w']) newY -= 1;
+                if (keys['ArrowDown'] || keys['s']) newY += 1;
+                if (keys['ArrowLeft'] || keys['a']) newX -= 1;
+                if (keys['ArrowRight'] || keys['d']) newX += 1;
+
+                if (newX >= 0 && newX < size && newY >= 0 && newY < size && maze[newY][newX] === 0) {
+                    playerX = newX;
+                    playerY = newY;
+                    moved = true;
+                }
+
+                if (moved) lastMoveTime = now;
+            }
+
+            if (playerX === size - 2 && playerY === size - 2) {
+                if (size < MAX_SIZE) {
+                    nextLevel();
+                } else {
+                    document.getElementById('message').textContent = 'Max level reached! You won!';
+                }
+            }
+
+            // Draw maze
+            for (let y = 0; y < size; y++) {
+                for (let x = 0; x < size; x++) {
+                    ctx.fillStyle = maze[y][x] ? '#000' : '#fff';
+                    ctx.fillRect(x * CELL_SIZE, y * CELL_SIZE, CELL_SIZE, CELL_SIZE);
+                }
+            }
+
+            // Draw start (green)
+            ctx.fillStyle = '#0f0';
+            ctx.fillRect(1 * CELL_SIZE, 1 * CELL_SIZE, CELL_SIZE, CELL_SIZE);
+
+            // Draw finish (red)
+            ctx.fillStyle = '#f00';
+            ctx.fillRect((size - 2) * CELL_SIZE, (size - 2) * CELL_SIZE, CELL_SIZE, CELL_SIZE);
+
+            // Draw items (yellow squares)
+            ctx.fillStyle = '#ffff00';
+            for (let item of items) {
+                ctx.fillRect(item.x * CELL_SIZE + 5, item.y * CELL_SIZE + 5, CELL_SIZE - 10, CELL_SIZE - 10);
+            }
+
+            // Draw monsters (purple circles)
+            ctx.fillStyle = '#bb00ff';
+            for (let monster of monsters) {
+                ctx.beginPath();
+                ctx.arc(monster.x * CELL_SIZE + CELL_SIZE / 2, monster.y * CELL_SIZE + CELL_SIZE / 2, CELL_SIZE / 3, 0, Math.PI * 2);
+                ctx.fill();
+            }
+
+            // Draw player (blue circle)
+            ctx.fillStyle = '#00f';
+            ctx.beginPath();
+            ctx.arc(playerX * CELL_SIZE + CELL_SIZE / 2, playerY * CELL_SIZE + CELL_SIZE / 2, CELL_SIZE / 3, 0, Math.PI * 2);
+            ctx.fill();
+
+            requestAnimationFrame(gameLoop);
+        }
+
+        gameLoop();
+    </script>
+</body>
+</html>
