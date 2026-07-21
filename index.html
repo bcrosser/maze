@@ -5,54 +5,219 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Maze</title>
     <style>
+        :root {
+            color-scheme: dark;
+            --ink: #f5f0df;
+            --muted: #b6b09f;
+            --panel: #171918;
+            --line: #676b60;
+            --accent: #efc75e;
+        }
+        * {
+            box-sizing: border-box;
+        }
         body {
             display: flex;
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            height: 100vh;
+            min-height: 100vh;
             margin: 0;
-            background: #333;
-            font-family: Arial, sans-serif;
+            padding: 16px;
+            background:
+                linear-gradient(135deg, rgba(255, 255, 255, 0.035) 25%, transparent 25%) 0 0 / 24px 24px,
+                linear-gradient(315deg, rgba(255, 255, 255, 0.025) 25%, transparent 25%) 0 0 / 24px 24px,
+                #242722;
+            color: var(--ink);
+            font-family: Georgia, 'Times New Roman', serif;
+        }
+        main {
+            display: grid;
+            justify-items: center;
+            gap: 10px;
+        }
+        #hud {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 8px 18px;
+            width: min(78vmin, 900px);
+            padding: 8px 12px;
+            border: 1px solid var(--line);
+            background: var(--panel);
+            font-variant-numeric: tabular-nums;
+        }
+        .stat-label {
+            color: var(--muted);
+        }
+        .stat-value {
+            color: var(--accent);
+            font-weight: 700;
         }
         canvas {
-            border: 2px solid white;
-            background: white;
+            width: min(78vmin, 900px);
+            height: min(78vmin, 900px);
+            border: 2px solid #d5d0be;
+            background: #f4f1e8;
+            image-rendering: pixelated;
         }
-        p {
-            color: white;
-            margin-top: 20px;
-        }
-        #level {
-            color: cyan;
+        #message {
+            min-height: 1.4em;
+            margin: 0;
+            color: #dce8a5;
             font-weight: bold;
-            font-size: 18px;
+            text-align: center;
         }
     </style>
 </head>
 <body>
-    <p id="level">Level: 1</p>
-    <canvas id="canvas"></canvas>
-    <p>Arrow keys to move</p>
-    <p id="message" style="color: lime; font-weight: bold;"></p>
+    <main>
+        <div id="hud" aria-live="polite">
+            <span><span class="stat-label">Level</span> <span class="stat-value" id="level">1</span></span>
+            <span><span class="stat-label">Health</span> <span class="stat-value" id="health">10 / 10</span></span>
+            <span><span class="stat-label">Mining</span> <span class="stat-value" id="mining">0 (0)</span></span>
+        </div>
+        <canvas id="canvas" aria-label="Maze game. Use arrow keys or WASD to move."></canvas>
+        <p id="message" aria-live="polite"></p>
+    </main>
 
     <script>
         const canvas = document.getElementById('canvas');
         const ctx = canvas.getContext('2d');
+        const levelElement = document.getElementById('level');
+        const healthElement = document.getElementById('health');
+        const miningElement = document.getElementById('mining');
+        const messageElement = document.getElementById('message');
         
         const MAX_SIZE = 51;
-        const CELL_SIZE = 30;
+        const CELL_SIZE = 32;
+        const SPRITE_LAYOUT = Object.freeze({tileSize: 32, columns: 10, rows: 5, capacity: 50});
+        const ITEM_SPRITE_IDS = Object.freeze([
+            'health-potion', 'mining-pick', 'mana-potion', 'antidote', 'fire-ward',
+            'ice-ward', 'lightning-ward', 'torch', 'lantern', 'iron-key',
+            'gold-key', 'crystal-key', 'compass', 'map-scroll', 'spell-scroll',
+            'tome', 'coin', 'diamond', 'ruby', 'sapphire',
+            'emerald', 'bread', 'apple', 'mushroom', 'meat',
+            'water-flask', 'bomb', 'snare', 'rope', 'shovel',
+            'axe', 'sword', 'dagger', 'spear', 'bow',
+            'arrow-bundle', 'shield', 'helmet', 'boots', 'gloves',
+            'ring', 'amulet', 'crown', 'hourglass', 'mirror',
+            'feather', 'bone', 'seed', 'gear', 'mystery-orb'
+        ]);
+        const MONSTER_SPRITE_IDS = Object.freeze([
+            'moss-slime', 'ember-hound', 'stone-golem', 'vine-crawler', 'skeleton',
+            'specter', 'cave-bat', 'giant-spider', 'tunnel-rat', 'viper',
+            'sporeling', 'frost-wraith', 'storm-wisp', 'water-elemental', 'earth-elemental',
+            'shadow-stalker', 'crystal-beetle', 'iron-beetle', 'scarab', 'cave-raider',
+            'lizard-warrior', 'horned-brute', 'cyclops', 'minotaur', 'harpy',
+            'gargoyle', 'mimic', 'floating-eye', 'tunnel-worm', 'scorpion',
+            'centipede', 'jelly-cube', 'cave-blob', 'fire-elemental', 'lava-serpent',
+            'ice-golem', 'bone-knight', 'dark-knight', 'masked-acolyte', 'witch',
+            'warlock', 'necromancer', 'vampire', 'werewolf', 'zombie',
+            'mummy', 'ember-imp', 'dragon-hatchling', 'hydra-head', 'maze-guardian'
+        ]);
+        const ITEM_SPRITES = Object.freeze(Object.fromEntries(
+            ITEM_SPRITE_IDS.map((spriteId, index) => [spriteId, index])
+        ));
+        const MONSTER_SPRITES = Object.freeze(Object.fromEntries(
+            MONSTER_SPRITE_IDS.map((spriteId, index) => [spriteId, index])
+        ));
+        const spriteSheets = {
+            item: {source: 'assets/item-sprites.png', image: null, ready: false, error: null},
+            monster: {source: 'assets/monster-sprites.png', image: null, ready: false, error: null}
+        };
+        const DIRECTIONS = Object.freeze([
+            Object.freeze({x: 0, y: -1}),
+            Object.freeze({x: 0, y: 1}),
+            Object.freeze({x: -1, y: 0}),
+            Object.freeze({x: 1, y: 0})
+        ]);
+        const MATERIALS = Object.freeze({
+            stone: Object.freeze({name: 'Stone', color: '#73777d', tags: ['mineral'], hardness: 1}),
+            granite: Object.freeze({name: 'Granite', color: '#8a6662', tags: ['mineral'], hardness: 2}),
+            marble: Object.freeze({name: 'Marble', color: '#d9d7cf', tags: ['mineral'], hardness: 2}),
+            obsidian: Object.freeze({name: 'Obsidian', color: '#211b2d', tags: ['mineral', 'magical'], hardness: 4}),
+            crystal: Object.freeze({name: 'Crystal', color: '#67d5e8', tags: ['mineral', 'magical'], hardness: 3}),
+            ice: Object.freeze({name: 'Ice', color: '#a8e5f2', tags: ['cold'], hardness: 1}),
+            glass: Object.freeze({name: 'Glass', color: '#b9ded8', tags: ['mineral'], hardness: 1}),
+            metal: Object.freeze({name: 'Metal', color: '#59636e', tags: ['mineral', 'conductive'], hardness: 3}),
+            copper: Object.freeze({name: 'Copper', color: '#b66a3c', tags: ['mineral', 'conductive'], hardness: 2}),
+            gold: Object.freeze({name: 'Gold', color: '#e8b923', tags: ['mineral', 'conductive'], hardness: 2}),
+            clay: Object.freeze({name: 'Clay', color: '#a85f49', tags: ['earth'], hardness: 1}),
+            earth: Object.freeze({name: 'Earth', color: '#66503a', tags: ['earth', 'organic'], hardness: 1}),
+            sand: Object.freeze({name: 'Sand', color: '#d8be72', tags: ['earth'], hardness: 1}),
+            wood: Object.freeze({name: 'Wood', color: '#81502f', tags: ['organic', 'flammable']}),
+            plants: Object.freeze({name: 'Plants', color: '#3c9b45', tags: ['organic', 'flammable']}),
+            vines: Object.freeze({name: 'Vines', color: '#23713b', tags: ['organic', 'flammable']}),
+            thorns: Object.freeze({name: 'Thorns', color: '#56752d', tags: ['organic', 'flammable', 'sharp']}),
+            fungus: Object.freeze({name: 'Fungus', color: '#a45aa5', tags: ['organic', 'poisonous']}),
+            bone: Object.freeze({name: 'Bone', color: '#e5dfbd', tags: ['organic'], hardness: 1}),
+            water: Object.freeze({name: 'Water', color: '#287ec7', tags: ['wet']}),
+            fire: Object.freeze({name: 'Fire', color: '#ff6a00', tags: ['hot', 'elemental']}),
+            lava: Object.freeze({name: 'Lava', color: '#df2b0b', tags: ['hot', 'elemental']}),
+            lightning: Object.freeze({name: 'Lightning', color: '#f4ed45', tags: ['conductive', 'elemental']}),
+            shadow: Object.freeze({name: 'Shadow', color: '#382f54', tags: ['magical']})
+        });
+        const MATERIAL_IDS = Object.freeze(Object.keys(MATERIALS));
+        const PASSAGE_CELL = Object.freeze({kind: 'passage', materialId: null});
+        const ITEM_TYPES = Object.freeze({
+            healthPotion: Object.freeze({
+                label: 'Health Potion',
+                spriteId: 'health-potion',
+                strategyId: 'healing',
+                fallbackColor: '#d83847'
+            }),
+            miningPick: Object.freeze({
+                label: 'Mining Pick',
+                spriteId: 'mining-pick',
+                strategyId: 'mining',
+                fallbackColor: '#d7a64a'
+            })
+        });
+        const MONSTER_TYPES = Object.freeze({
+            mossSlime: Object.freeze({
+                label: 'Moss Slime',
+                spriteId: 'moss-slime',
+                strategyId: 'wander',
+                fallbackColor: '#55a33f',
+                moveDelay: 650,
+                attackCooldown: 900
+            }),
+            emberHound: Object.freeze({
+                label: 'Ember Hound',
+                spriteId: 'ember-hound',
+                strategyId: 'fireHunter',
+                fallbackColor: '#ef5b24',
+                moveDelay: 420,
+                attackCooldown: 800
+            })
+        });
         let level = 1;
         let size = 21;
         let maze;
-        let playerX = 1, playerY = 1;
+        let player = createPlayer();
         let lastMoveTime = 0;
         const MOVE_DELAY = 100;
         const keys = {};
         let items = [];
         let monsters = [];
+        let nextEntityId = 1;
+        let gameState = 'loading';
+        let statusExpiresAt = Infinity;
 
-        function generateMaze() {
+        function createPlayer() {
+            return {
+                x: 1,
+                y: 1,
+                health: 10,
+                maxHealth: 10,
+                miningPower: 0,
+                miningCharges: 0,
+                invulnerableUntil: 0
+            };
+        }
+
+        function generateMazeTopology() {
             const grid = Array(size).fill(null).map(() => Array(size).fill(1));
             
             for (let y = 1; y < size; y += 2) {
@@ -109,131 +274,635 @@
             return grid;
         }
 
-        function generateItems() {
-            items = [];
-            const itemCount = Math.floor(size / 5);
-            let placed = 0;
+        function shuffle(values) {
+            for (let index = values.length - 1; index > 0; index--) {
+                const swapIndex = Math.floor(Math.random() * (index + 1));
+                [values[index], values[swapIndex]] = [values[swapIndex], values[index]];
+            }
+            return values;
+        }
 
-            while (placed < itemCount) {
-                const x = Math.floor(Math.random() * size);
-                const y = Math.floor(Math.random() * size);
+        function assignWallMaterials(topology) {
+            const wallPositions = [];
 
-                if (maze[y][x] === 0 && !(x === 1 && y === 1) && !(x === size - 2 && y === size - 2)) {
-                    items.push({x, y});
-                    placed++;
+            for (let y = 0; y < size; y++) {
+                for (let x = 0; x < size; x++) {
+                    if (topology[y][x] === 1) wallPositions.push({x, y});
                 }
+            }
+
+            const seedPositions = shuffle([...wallPositions]).slice(0, MATERIAL_IDS.length);
+            const seeds = seedPositions.map((position, index) => ({
+                ...position,
+                materialId: MATERIAL_IDS[index]
+            }));
+
+            return topology.map((row, y) => row.map((value, x) => {
+                if (value === 0) return PASSAGE_CELL;
+
+                let nearestSeed = seeds[0];
+                let nearestDistance = Infinity;
+
+                for (const seed of seeds) {
+                    const distance = Math.abs(seed.x - x) + Math.abs(seed.y - y);
+                    if (distance < nearestDistance) {
+                        nearestDistance = distance;
+                        nearestSeed = seed;
+                    }
+                }
+
+                return Object.freeze({kind: 'wall', materialId: nearestSeed.materialId});
+            }));
+        }
+
+        function generateMaze() {
+            return assignWallMaterials(generateMazeTopology());
+        }
+
+        function getCell(x, y) {
+            if (x < 0 || x >= size || y < 0 || y >= size) return null;
+            return maze[y][x];
+        }
+
+        function isPassable(x, y) {
+            return getCell(x, y)?.kind === 'passage';
+        }
+
+        function getWallMaterial(x, y) {
+            const cell = getCell(x, y);
+            return cell?.kind === 'wall' ? MATERIALS[cell.materialId] : null;
+        }
+
+        function getAdjacentWallMaterials(x, y) {
+            return DIRECTIONS
+                .map(direction => getWallMaterial(x + direction.x, y + direction.y))
+                .filter(Boolean);
+        }
+
+        const ITEM_STRATEGIES = Object.freeze({
+            healing: Object.freeze({
+                onPickup(context) {
+                    const restoredHealth = Math.min(4, context.player.maxHealth - context.player.health);
+                    context.player.health += restoredHealth;
+                    context.updateHud();
+                    context.setStatus(restoredHealth > 0
+                        ? `${context.type.label} restored ${restoredHealth} health.`
+                        : `${context.type.label} was consumed, but health was already full.`);
+                    return true;
+                }
+            }),
+            mining: Object.freeze({
+                onPickup(context) {
+                    context.player.miningPower = Math.max(context.player.miningPower, 2);
+                    context.player.miningCharges += 6;
+                    context.updateHud();
+                    context.setStatus(`${context.type.label} granted 6 mining charges.`);
+                    return true;
+                }
+            })
+        });
+
+        const MONSTER_STRATEGIES = Object.freeze({
+            wander: Object.freeze({
+                update(context) {
+                    const nextStep = context.chooseRandomStep();
+                    if (nextStep) context.moveTo(nextStep);
+                },
+                onContact(context) {
+                    context.damagePlayer(1);
+                }
+            }),
+            fireHunter: Object.freeze({
+                update(context) {
+                    const nextStep = context.findStepTowardPlayer();
+                    if (nextStep) context.moveTo(nextStep);
+                },
+                onContact(context) {
+                    const isNearHotWall = context.adjacentWallMaterials
+                        .some(material => material.tags.includes('hot'));
+                    context.damagePlayer(isNearHotWall ? 3 : 2);
+                }
+            })
+        });
+
+        function setStatus(message, duration = 2400) {
+            messageElement.textContent = message;
+            statusExpiresAt = duration === Infinity ? Infinity : performance.now() + duration;
+        }
+
+        function updateStatus(now) {
+            if (now >= statusExpiresAt) {
+                messageElement.textContent = '';
+                statusExpiresAt = Infinity;
             }
         }
 
-        function generateMonsters() {
-            monsters = [];
-            const monsterCount = Math.floor(size / 4);
-            let placed = 0;
+        function updateHud() {
+            levelElement.textContent = level;
+            healthElement.textContent = `${player.health} / ${player.maxHealth}`;
+            miningElement.textContent = `${player.miningPower} (${player.miningCharges})`;
+        }
 
-            while (placed < monsterCount) {
-                const x = Math.floor(Math.random() * size);
-                const y = Math.floor(Math.random() * size);
+        function coordinateKey(x, y) {
+            return `${x},${y}`;
+        }
 
-                if (maze[y][x] === 0 && !(x === 1 && y === 1) && !(x === size - 2 && y === size - 2)) {
-                    monsters.push({x, y});
-                    placed++;
+        function parseCoordinateKey(key) {
+            const [x, y] = key.split(',').map(Number);
+            return {x, y};
+        }
+
+        function isStartOrFinish(x, y) {
+            return (x === 1 && y === 1) || (x === size - 2 && y === size - 2);
+        }
+
+        function isPerimeter(x, y) {
+            return x === 0 || y === 0 || x === size - 1 || y === size - 1;
+        }
+
+        function attachItemStrategy(item) {
+            const type = ITEM_TYPES[item.typeId];
+            const strategy = type && ITEM_STRATEGIES[type.strategyId];
+            if (!type || !strategy) throw new Error(`Unknown item strategy for type: ${item.typeId}`);
+            item.strategy = strategy;
+            return item;
+        }
+
+        function attachMonsterStrategy(monster) {
+            const type = MONSTER_TYPES[monster.typeId];
+            const strategy = type && MONSTER_STRATEGIES[type.strategyId];
+            if (!type || !strategy) throw new Error(`Unknown monster strategy for type: ${monster.typeId}`);
+            monster.strategy = strategy;
+            return monster;
+        }
+
+        function getAvailableSpawnPositions() {
+            const positions = [];
+            for (let y = 0; y < size; y++) {
+                for (let x = 0; x < size; x++) {
+                    if (isPassable(x, y) && !isStartOrFinish(x, y)) positions.push({x, y});
                 }
             }
+            return shuffle(positions);
+        }
+
+        function generateItems(availablePositions) {
+            items = [];
+            const typeIds = Object.keys(ITEM_TYPES);
+            const itemCount = Math.min(Math.floor(size / 5), availablePositions.length);
+
+            for (let index = 0; index < itemCount; index++) {
+                const position = availablePositions.pop();
+                items.push(attachItemStrategy({
+                    id: `item-${nextEntityId++}`,
+                    typeId: typeIds[index % typeIds.length],
+                    ...position
+                }));
+            }
+        }
+
+        function generateMonsters(availablePositions) {
+            monsters = [];
+            const typeIds = Object.keys(MONSTER_TYPES);
+            const monsterCount = Math.min(Math.floor(size / 4), availablePositions.length);
+            const createdAt = performance.now();
+
+            for (let index = 0; index < monsterCount; index++) {
+                const position = availablePositions.pop();
+                const typeId = typeIds[index % typeIds.length];
+                const type = MONSTER_TYPES[typeId];
+                monsters.push(attachMonsterStrategy({
+                    id: `monster-${nextEntityId++}`,
+                    typeId,
+                    ...position,
+                    moveDelay: type.moveDelay,
+                    attackCooldown: type.attackCooldown,
+                    lastMoveAt: createdAt,
+                    lastAttackAt: -Infinity
+                }));
+            }
+        }
+
+        function generateEntities() {
+            const availablePositions = getAvailableSpawnPositions();
+            generateItems(availablePositions);
+            generateMonsters(availablePositions);
+        }
+
+        function getRequestedDirection() {
+            if (keys.arrowup || keys.w) return DIRECTIONS[0];
+            if (keys.arrowdown || keys.s) return DIRECTIONS[1];
+            if (keys.arrowleft || keys.a) return DIRECTIONS[2];
+            if (keys.arrowright || keys.d) return DIRECTIONS[3];
+            return null;
+        }
+
+        function tryMovePlayer(direction) {
+            const targetX = player.x + direction.x;
+            const targetY = player.y + direction.y;
+
+            if (isPassable(targetX, targetY)) {
+                player.x = targetX;
+                player.y = targetY;
+                return true;
+            }
+
+            const material = getWallMaterial(targetX, targetY);
+            if (!material || isPerimeter(targetX, targetY)) return false;
+            if (!material.tags.includes('mineral') || material.hardness === undefined) {
+                setStatus(`${material.name} cannot be mined with this pick.`);
+                return false;
+            }
+            if (player.miningCharges === 0) {
+                setStatus('A mining pick is required to break mineral walls.');
+                return false;
+            }
+            if (material.hardness > player.miningPower) {
+                setStatus(`${material.name} requires mining power ${material.hardness}.`);
+                return false;
+            }
+
+            maze[targetY][targetX] = PASSAGE_CELL;
+            player.miningCharges--;
+            player.x = targetX;
+            player.y = targetY;
+            updateHud();
+            setStatus(`Mined through ${material.name}.`);
+            return true;
+        }
+
+        function updatePlayerMovement(now) {
+            if (now - lastMoveTime < MOVE_DELAY) return false;
+            const direction = getRequestedDirection();
+            if (!direction) return false;
+            lastMoveTime = now;
+            return tryMovePlayer(direction);
+        }
+
+        function collectItemsAtPlayer() {
+            const remainingItems = [];
+
+            for (const item of items) {
+                if (item.x !== player.x || item.y !== player.y) {
+                    remainingItems.push(item);
+                    continue;
+                }
+
+                const type = ITEM_TYPES[item.typeId];
+                const consumed = item.strategy.onPickup({
+                    item,
+                    type,
+                    player,
+                    setStatus,
+                    updateHud
+                });
+                if (!consumed) remainingItems.push(item);
+            }
+
+            items = remainingItems;
+        }
+
+        function damagePlayer(amount, now, sourceLabel) {
+            if (now < player.invulnerableUntil) return false;
+            player.health = Math.max(0, player.health - amount);
+            player.invulnerableUntil = now + 600;
+            updateHud();
+            setStatus(`${sourceLabel} dealt ${amount} damage.`);
+            return true;
+        }
+
+        function getRandomMonsterStep(monster, occupiedPositions) {
+            const availableSteps = DIRECTIONS
+                .map(direction => ({x: monster.x + direction.x, y: monster.y + direction.y}))
+                .filter(step => isPassable(step.x, step.y))
+                .filter(step => !occupiedPositions.has(coordinateKey(step.x, step.y)));
+
+            return availableSteps[Math.floor(Math.random() * availableSteps.length)] || null;
+        }
+
+        function findStepTowardPlayer(monster) {
+            const startKey = coordinateKey(monster.x, monster.y);
+            const targetKey = coordinateKey(player.x, player.y);
+            if (startKey === targetKey) return null;
+
+            const queue = [{x: monster.x, y: monster.y}];
+            const previous = new Map([[startKey, null]]);
+            let queueIndex = 0;
+
+            while (queueIndex < queue.length && !previous.has(targetKey)) {
+                const current = queue[queueIndex++];
+
+                for (const direction of DIRECTIONS) {
+                    const next = {x: current.x + direction.x, y: current.y + direction.y};
+                    const nextKey = coordinateKey(next.x, next.y);
+                    if (!isPassable(next.x, next.y) || previous.has(nextKey)) continue;
+                    previous.set(nextKey, coordinateKey(current.x, current.y));
+                    queue.push(next);
+                }
+            }
+
+            if (!previous.has(targetKey)) return null;
+            let stepKey = targetKey;
+            while (previous.get(stepKey) !== startKey) {
+                stepKey = previous.get(stepKey);
+                if (stepKey === null) return null;
+            }
+            return parseCoordinateKey(stepKey);
+        }
+
+        function moveMonsterTo(monster, step, occupiedPositions) {
+            const targetKey = coordinateKey(step.x, step.y);
+            if (!isPassable(step.x, step.y) || occupiedPositions.has(targetKey)) return false;
+            occupiedPositions.delete(coordinateKey(monster.x, monster.y));
+            monster.x = step.x;
+            monster.y = step.y;
+            occupiedPositions.add(targetKey);
+            return true;
+        }
+
+        function updateMonsters(now) {
+            const occupiedPositions = new Set(
+                monsters.map(monster => coordinateKey(monster.x, monster.y))
+            );
+
+            for (const monster of monsters) {
+                if (now - monster.lastMoveAt < monster.moveDelay) continue;
+                monster.lastMoveAt = now;
+                monster.strategy.update({
+                    monster,
+                    player,
+                    chooseRandomStep: () => getRandomMonsterStep(monster, occupiedPositions),
+                    findStepTowardPlayer: () => findStepTowardPlayer(monster),
+                    moveTo: step => moveMonsterTo(monster, step, occupiedPositions),
+                    isPassable,
+                    getWallMaterial
+                });
+            }
+        }
+
+        function resolveMonsterContacts(now) {
+            for (const monster of monsters) {
+                if (monster.x !== player.x || monster.y !== player.y) continue;
+                if (now - monster.lastAttackAt < monster.attackCooldown) continue;
+
+                monster.lastAttackAt = now;
+                const type = MONSTER_TYPES[monster.typeId];
+                monster.strategy.onContact({
+                    monster,
+                    player,
+                    adjacentWallMaterials: getAdjacentWallMaterials(monster.x, monster.y),
+                    damagePlayer: amount => damagePlayer(amount, now, type.label)
+                });
+
+                if (player.health === 0) return true;
+            }
+            return false;
+        }
+
+        function setCanvasSize() {
+            canvas.width = size * CELL_SIZE;
+            canvas.height = size * CELL_SIZE;
+            ctx.imageSmoothingEnabled = false;
+        }
+
+        function startLevel(announcement = '') {
+            maze = generateMaze();
+            generateEntities();
+            player.x = 1;
+            player.y = 1;
+            player.invulnerableUntil = performance.now() + 500;
+            lastMoveTime = 0;
+            setCanvasSize();
+            updateHud();
+            if (announcement) setStatus(announcement);
         }
 
         function nextLevel() {
             level++;
             size = Math.min(size + 4, MAX_SIZE);
-            maze = generateMaze();
-            generateItems();
-            generateMonsters();
-            playerX = 1;
-            playerY = 1;
-            lastMoveTime = 0;
-            document.getElementById('level').textContent = `Level: ${level}`;
-            document.getElementById('message').textContent = '';
-            canvas.width = size * CELL_SIZE;
-            canvas.height = size * CELL_SIZE;
+            startLevel(`Entered level ${level}.`);
         }
 
-        maze = generateMaze();
-        generateItems();
-        generateMonsters();
-        canvas.width = size * CELL_SIZE;
-        canvas.height = size * CELL_SIZE;
+        function restartCurrentLevelAfterDeath() {
+            player = createPlayer();
+            startLevel(`Defeated. Level ${level} restarted with baseline stats.`);
+        }
 
-        window.addEventListener('keydown', e => keys[e.key] = true);
-        window.addEventListener('keyup', e => keys[e.key] = false);
+        function checkLevelCompletion() {
+            if (player.x !== size - 2 || player.y !== size - 2) return false;
+            if (size < MAX_SIZE) {
+                nextLevel();
+            } else {
+                gameState = 'won';
+                setStatus('Max level reached. You won!', Infinity);
+            }
+            return true;
+        }
 
-        function gameLoop() {
-            const now = Date.now();
-            let moved = false;
+        function validateSpriteCatalog(label, spriteIds, catalog) {
+            const indices = Object.values(catalog);
+            const uniqueIds = new Set(spriteIds);
+            const uniqueIndices = new Set(indices);
+            const allIndicesValid = indices.every(index =>
+                Number.isInteger(index) && index >= 0 && index < SPRITE_LAYOUT.capacity
+            );
 
-            if (now - lastMoveTime >= MOVE_DELAY) {
-                let newX = playerX, newY = playerY;
+            if (spriteIds.length !== SPRITE_LAYOUT.capacity ||
+                uniqueIds.size !== SPRITE_LAYOUT.capacity ||
+                uniqueIndices.size !== SPRITE_LAYOUT.capacity ||
+                !allIndicesValid) {
+                throw new Error(`${label} sprite catalog must contain 50 unique in-range entries.`);
+            }
+        }
 
-                if (keys['ArrowUp'] || keys['w']) newY -= 1;
-                if (keys['ArrowDown'] || keys['s']) newY += 1;
-                if (keys['ArrowLeft'] || keys['a']) newX -= 1;
-                if (keys['ArrowRight'] || keys['d']) newX += 1;
+        function loadImage(source) {
+            return new Promise((resolve, reject) => {
+                const image = new Image();
+                image.onload = () => resolve(image);
+                image.onerror = () => reject(new Error(`Could not load ${source}.`));
+                image.src = source;
+            });
+        }
 
-                if (newX >= 0 && newX < size && newY >= 0 && newY < size && maze[newY][newX] === 0) {
-                    playerX = newX;
-                    playerY = newY;
-                    moved = true;
+        async function loadSpriteSheet(kind) {
+            const sheet = spriteSheets[kind];
+            try {
+                const image = await loadImage(sheet.source);
+                const expectedWidth = SPRITE_LAYOUT.columns * SPRITE_LAYOUT.tileSize;
+                const expectedHeight = SPRITE_LAYOUT.rows * SPRITE_LAYOUT.tileSize;
+                if (image.naturalWidth !== expectedWidth || image.naturalHeight !== expectedHeight) {
+                    throw new Error(`${sheet.source} must be ${expectedWidth}x${expectedHeight} pixels.`);
                 }
+                sheet.image = image;
+                sheet.ready = true;
+                sheet.error = null;
+                return null;
+            } catch (error) {
+                sheet.image = null;
+                sheet.ready = false;
+                sheet.error = error.message;
+                return error.message;
+            }
+        }
 
-                if (moved) lastMoveTime = now;
+        async function loadSpriteSheets() {
+            const errors = [];
+            try {
+                validateSpriteCatalog('Item', ITEM_SPRITE_IDS, ITEM_SPRITES);
+                validateSpriteCatalog('Monster', MONSTER_SPRITE_IDS, MONSTER_SPRITES);
+            } catch (error) {
+                errors.push(error.message);
             }
 
-            if (playerX === size - 2 && playerY === size - 2) {
-                if (size < MAX_SIZE) {
-                    nextLevel();
-                } else {
-                    document.getElementById('message').textContent = 'Max level reached! You won!';
-                }
-            }
+            const loadErrors = await Promise.all([
+                loadSpriteSheet('item'),
+                loadSpriteSheet('monster')
+            ]);
+            return errors.concat(loadErrors.filter(Boolean));
+        }
 
-            // Draw maze
+        function drawMaze() {
             for (let y = 0; y < size; y++) {
                 for (let x = 0; x < size; x++) {
-                    ctx.fillStyle = maze[y][x] ? '#000' : '#fff';
+                    const cell = maze[y][x];
+                    ctx.fillStyle = cell.kind === 'wall'
+                        ? MATERIALS[cell.materialId].color
+                        : '#f4f1e8';
                     ctx.fillRect(x * CELL_SIZE, y * CELL_SIZE, CELL_SIZE, CELL_SIZE);
                 }
             }
 
-            // Draw start (green)
-            ctx.fillStyle = '#0f0';
-            ctx.fillRect(1 * CELL_SIZE, 1 * CELL_SIZE, CELL_SIZE, CELL_SIZE);
+            ctx.fillStyle = '#3b9c58';
+            ctx.fillRect(CELL_SIZE + 8, CELL_SIZE + 8, CELL_SIZE - 16, CELL_SIZE - 16);
+            ctx.fillStyle = '#ca4338';
+            ctx.fillRect((size - 2) * CELL_SIZE + 8, (size - 2) * CELL_SIZE + 8, CELL_SIZE - 16, CELL_SIZE - 16);
+        }
 
-            // Draw finish (red)
-            ctx.fillStyle = '#f00';
-            ctx.fillRect((size - 2) * CELL_SIZE, (size - 2) * CELL_SIZE, CELL_SIZE, CELL_SIZE);
-
-            // Draw items (yellow squares)
-            ctx.fillStyle = '#ffff00';
-            for (let item of items) {
-                ctx.fillRect(item.x * CELL_SIZE + 5, item.y * CELL_SIZE + 5, CELL_SIZE - 10, CELL_SIZE - 10);
+        function drawSprite(kind, catalog, spriteId, x, y) {
+            const sheet = spriteSheets[kind];
+            const spriteIndex = catalog[spriteId];
+            if (!sheet.ready || !sheet.image || !Number.isInteger(spriteIndex) ||
+                spriteIndex < 0 || spriteIndex >= SPRITE_LAYOUT.capacity) {
+                return false;
             }
 
-            // Draw monsters (purple circles)
-            ctx.fillStyle = '#bb00ff';
-            for (let monster of monsters) {
+            const sourceX = (spriteIndex % SPRITE_LAYOUT.columns) * SPRITE_LAYOUT.tileSize;
+            const sourceY = Math.floor(spriteIndex / SPRITE_LAYOUT.columns) * SPRITE_LAYOUT.tileSize;
+            ctx.drawImage(
+                sheet.image,
+                sourceX,
+                sourceY,
+                SPRITE_LAYOUT.tileSize,
+                SPRITE_LAYOUT.tileSize,
+                x * CELL_SIZE,
+                y * CELL_SIZE,
+                CELL_SIZE,
+                CELL_SIZE
+            );
+            return true;
+        }
+
+        function drawItems() {
+            for (const item of items) {
+                const type = ITEM_TYPES[item.typeId];
+                if (drawSprite('item', ITEM_SPRITES, type.spriteId, item.x, item.y)) continue;
+                ctx.fillStyle = type.fallbackColor;
+                ctx.fillRect(item.x * CELL_SIZE + 8, item.y * CELL_SIZE + 8, CELL_SIZE - 16, CELL_SIZE - 16);
+            }
+        }
+
+        function drawMonsters() {
+            for (const monster of monsters) {
+                const type = MONSTER_TYPES[monster.typeId];
+                if (drawSprite('monster', MONSTER_SPRITES, type.spriteId, monster.x, monster.y)) continue;
+                ctx.fillStyle = type.fallbackColor;
                 ctx.beginPath();
-                ctx.arc(monster.x * CELL_SIZE + CELL_SIZE / 2, monster.y * CELL_SIZE + CELL_SIZE / 2, CELL_SIZE / 3, 0, Math.PI * 2);
+                ctx.arc(
+                    monster.x * CELL_SIZE + CELL_SIZE / 2,
+                    monster.y * CELL_SIZE + CELL_SIZE / 2,
+                    CELL_SIZE / 3,
+                    0,
+                    Math.PI * 2
+                );
                 ctx.fill();
             }
+        }
 
-            // Draw player (blue circle)
-            ctx.fillStyle = '#00f';
+        function drawPlayer(now) {
+            const isInvulnerable = now < player.invulnerableUntil;
+            if (isInvulnerable && Math.floor(now / 100) % 2 === 0) return;
+            ctx.fillStyle = '#2468d8';
+            ctx.strokeStyle = '#102d66';
+            ctx.lineWidth = 3;
             ctx.beginPath();
-            ctx.arc(playerX * CELL_SIZE + CELL_SIZE / 2, playerY * CELL_SIZE + CELL_SIZE / 2, CELL_SIZE / 3, 0, Math.PI * 2);
+            ctx.arc(
+                player.x * CELL_SIZE + CELL_SIZE / 2,
+                player.y * CELL_SIZE + CELL_SIZE / 2,
+                CELL_SIZE / 3,
+                0,
+                Math.PI * 2
+            );
             ctx.fill();
+            ctx.stroke();
+        }
 
+        function drawGame(now) {
+            drawMaze();
+            drawItems();
+            drawMonsters();
+            drawPlayer(now);
+        }
+
+        function gameLoop(now) {
+            updateStatus(now);
+
+            if (gameState === 'playing') {
+                updatePlayerMovement(now);
+                collectItemsAtPlayer();
+
+                if (!checkLevelCompletion()) {
+                    updateMonsters(now);
+                    if (resolveMonsterContacts(now)) restartCurrentLevelAfterDeath();
+                }
+            }
+
+            drawGame(now);
             requestAnimationFrame(gameLoop);
         }
 
-        gameLoop();
+        function normalizeMovementKey(key) {
+            return key.length === 1 ? key.toLowerCase() : key.toLowerCase();
+        }
+
+        window.addEventListener('keydown', event => {
+            const key = normalizeMovementKey(event.key);
+            if (!['arrowup', 'arrowdown', 'arrowleft', 'arrowright', 'w', 'a', 's', 'd'].includes(key)) return;
+            keys[key] = true;
+            event.preventDefault();
+        });
+
+        window.addEventListener('keyup', event => {
+            keys[normalizeMovementKey(event.key)] = false;
+        });
+
+        window.addEventListener('blur', () => {
+            for (const key of Object.keys(keys)) keys[key] = false;
+        });
+
+        async function initializeGame() {
+            setStatus('Loading sprite sheets...', Infinity);
+            const assetErrors = await loadSpriteSheets();
+            startLevel();
+            gameState = 'playing';
+            if (assetErrors.length > 0) {
+                setStatus(`Sprite fallback active: ${assetErrors.join(' ')}`, 7000);
+            } else {
+                setStatus('Find the red exit. Items and monsters are now active.');
+            }
+            requestAnimationFrame(gameLoop);
+        }
+
+        initializeGame();
     </script>
 </body>
 </html>
