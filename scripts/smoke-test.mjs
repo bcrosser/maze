@@ -35,16 +35,105 @@ const context2d = {
     }
 };
 
+function createElement(...initialClasses) {
+    const classes = new Set(initialClasses);
+    const listeners = new Map();
+    const attributes = new Map();
+
+    return {
+        textContent: '',
+        style: {},
+        classList: {
+            add(...names) {
+                for (const name of names) classes.add(name);
+            },
+            remove(...names) {
+                for (const name of names) classes.delete(name);
+            },
+            toggle(name, force) {
+                const shouldAdd = force === undefined ? !classes.has(name) : force;
+                if (shouldAdd) classes.add(name);
+                else classes.delete(name);
+                return shouldAdd;
+            },
+            contains(name) {
+                return classes.has(name);
+            }
+        },
+        addEventListener(type, listener) {
+            const typeListeners = listeners.get(type) ?? [];
+            typeListeners.push(listener);
+            listeners.set(type, typeListeners);
+        },
+        dispatch(type, properties = {}) {
+            const event = {
+                ...properties,
+                defaultPrevented: false,
+                propagationStopped: false,
+                preventDefault() {
+                    this.defaultPrevented = true;
+                },
+                stopPropagation() {
+                    this.propagationStopped = true;
+                }
+            };
+            for (const listener of listeners.get(type) ?? []) listener(event);
+            return event;
+        },
+        setAttribute(name, value) {
+            attributes.set(name, String(value));
+        },
+        getAttribute(name) {
+            return attributes.get(name) ?? null;
+        },
+        focus() {
+            this.focused = true;
+        }
+    };
+}
+
 const elements = {
-    canvas: {
+    canvas: Object.assign(createElement(), {
         width: 0,
         height: 0,
         getContext: () => context2d
+    }),
+    level: createElement(),
+    health: createElement(),
+    mining: createElement(),
+    message: createElement(),
+    'overlay-backdrop': createElement(),
+    'start-panel': createElement(),
+    'start-btn': createElement(),
+    'overlay-backdrop-pause': createElement('hidden'),
+    'pause-panel': createElement('hidden'),
+    'resume-btn': createElement(),
+    'restart-btn': createElement(),
+    'overlay-backdrop-win': createElement('hidden'),
+    'win-panel': createElement('hidden'),
+    'play-again-btn': createElement(),
+    'menu-toggle-btn': createElement('hidden'),
+    'game-main': createElement('hidden')
+};
+
+const windowListeners = new Map();
+const fakeWindow = {
+    addEventListener(type, listener) {
+        const typeListeners = windowListeners.get(type) ?? [];
+        typeListeners.push(listener);
+        windowListeners.set(type, typeListeners);
     },
-    level: {textContent: ''},
-    health: {textContent: ''},
-    mining: {textContent: ''},
-    message: {textContent: ''}
+    dispatch(type, properties = {}) {
+        const event = {
+            ...properties,
+            defaultPrevented: false,
+            preventDefault() {
+                this.defaultPrevented = true;
+            }
+        };
+        for (const listener of windowListeners.get(type) ?? []) listener(event);
+        return event;
+    }
 };
 
 class FakeImage {
@@ -68,9 +157,7 @@ const browserContext = vm.createContext({
             return elements[id];
         }
     },
-    window: {
-        addEventListener() {}
-    },
+    window: fakeWindow,
     Image: FakeImage,
     performance,
     queueMicrotask,
@@ -82,6 +169,22 @@ const browserContext = vm.createContext({
 
 const testBridge = `
 globalThis.__mazeTest = {
+    uiSnapshot() {
+        return {
+            gameState,
+            startVisible: !startPanel.classList.contains('hidden'),
+            gameVisible: !gameMain.classList.contains('hidden'),
+            pauseVisible: !pausePanel.classList.contains('hidden'),
+            pauseBackdropVisible: !pauseBackdrop.classList.contains('hidden'),
+            winVisible: !winPanel.classList.contains('hidden'),
+            menuButtonVisible: !menuToggleBtn.classList.contains('hidden'),
+            menuExpanded: menuToggleBtn.getAttribute('aria-expanded'),
+            level,
+            size,
+            health: player.health
+        };
+    },
+
     snapshot() {
         const materialIds = new Set();
         for (const row of maze) {
@@ -111,8 +214,17 @@ globalThis.__mazeTest = {
             activeItemTypes: new Set(items.map(item => item.typeId)).size,
             activeMonsterTypes: new Set(monsters.map(monster => monster.typeId)).size,
             canvasWidth: canvas.width,
-            canvasHeight: canvas.height
+            canvasHeight: canvas.height,
+            level,
+            size
         };
+    },
+
+    completeMaxLevel() {
+        size = MAX_SIZE;
+        player.x = size - 2;
+        player.y = size - 2;
+        return checkLevelCompletion();
     },
 
     runBehaviorChecks() {
@@ -206,6 +318,14 @@ globalThis.__mazeTest = {
 `;
 
 vm.runInContext(`${scriptMatch[1]}\n${testBridge}`, browserContext, {filename: 'index.html'});
+
+let uiSnapshot = vm.runInContext('__mazeTest.uiSnapshot()', browserContext);
+assert.equal(uiSnapshot.gameState, 'menu');
+assert.equal(uiSnapshot.startVisible, true);
+assert.equal(uiSnapshot.gameVisible, false);
+assert.equal(uiSnapshot.menuButtonVisible, false);
+
+elements['start-btn'].dispatch('click');
 await new Promise(resolve => setImmediate(resolve));
 await new Promise(resolve => setImmediate(resolve));
 
@@ -238,6 +358,57 @@ const behaviorChecks = vm.runInContext('__mazeTest.runBehaviorChecks()', browser
 for (const [check, passed] of Object.entries(behaviorChecks)) {
     assert.equal(passed, true, `${check} failed`);
 }
+
+elements['menu-toggle-btn'].dispatch('click');
+uiSnapshot = vm.runInContext('__mazeTest.uiSnapshot()', browserContext);
+assert.equal(uiSnapshot.gameState, 'paused');
+assert.equal(uiSnapshot.pauseVisible, true);
+assert.equal(uiSnapshot.pauseBackdropVisible, true);
+assert.equal(uiSnapshot.menuButtonVisible, false);
+assert.equal(uiSnapshot.menuExpanded, 'true');
+
+elements['overlay-backdrop-pause'].dispatch('click');
+uiSnapshot = vm.runInContext('__mazeTest.uiSnapshot()', browserContext);
+assert.equal(uiSnapshot.gameState, 'playing');
+assert.equal(uiSnapshot.pauseVisible, false);
+assert.equal(uiSnapshot.menuButtonVisible, true);
+
+fakeWindow.dispatch('blur');
+uiSnapshot = vm.runInContext('__mazeTest.uiSnapshot()', browserContext);
+assert.equal(uiSnapshot.gameState, 'paused');
+fakeWindow.dispatch('focus');
+uiSnapshot = vm.runInContext('__mazeTest.uiSnapshot()', browserContext);
+assert.equal(uiSnapshot.gameState, 'playing');
+
+elements['menu-toggle-btn'].dispatch('click');
+fakeWindow.dispatch('blur');
+fakeWindow.dispatch('focus');
+uiSnapshot = vm.runInContext('__mazeTest.uiSnapshot()', browserContext);
+assert.equal(uiSnapshot.gameState, 'paused', 'Manual pause should survive window focus changes.');
+const escapeEvent = fakeWindow.dispatch('keydown', {key: 'Escape'});
+uiSnapshot = vm.runInContext('__mazeTest.uiSnapshot()', browserContext);
+assert.equal(uiSnapshot.gameState, 'playing');
+assert.equal(escapeEvent.defaultPrevented, true);
+
+elements['menu-toggle-btn'].dispatch('click');
+elements['restart-btn'].dispatch('click');
+uiSnapshot = vm.runInContext('__mazeTest.uiSnapshot()', browserContext);
+assert.equal(uiSnapshot.gameState, 'playing');
+assert.equal(uiSnapshot.level, 1);
+assert.equal(uiSnapshot.size, 21);
+assert.equal(uiSnapshot.health, 10);
+assert.equal(uiSnapshot.pauseVisible, false);
+
+assert.equal(vm.runInContext('__mazeTest.completeMaxLevel()', browserContext), true);
+uiSnapshot = vm.runInContext('__mazeTest.uiSnapshot()', browserContext);
+assert.equal(uiSnapshot.gameState, 'won');
+assert.equal(uiSnapshot.winVisible, true);
+elements['play-again-btn'].dispatch('click');
+uiSnapshot = vm.runInContext('__mazeTest.uiSnapshot()', browserContext);
+assert.equal(uiSnapshot.gameState, 'playing');
+assert.equal(uiSnapshot.level, 1);
+assert.equal(uiSnapshot.size, 21);
+assert.equal(uiSnapshot.winVisible, false);
 
 console.log('Smoke test passed:', {
     materials: snapshot.usedMaterialCount,
