@@ -1,0 +1,32 @@
+{
+  "name": "maze",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:legacy": "node scripts/smoke-test.mjs",
+    "test:e2e": "playwright test",
+    "assets:generate": "node scripts/generate-sprites.mjs",
+    "check": "npm run typecheck && npm run test && npm run test:legacy && npm run build",
+    "check:all": "npm run check && npm run test:e2e"
+  },
+  "dependencies": {
+    "phaser": "4.2.1",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.61.1",
+    "@types/pngjs": "6.0.5",
+    "@vitest/coverage-v8": "4.1.10",
+    "pngjs": "7.0.0",
+    "typescript": "7.0.2",
+    "vite": "8.1.5",
+    "vitest": "4.1.10"
+  }
+}

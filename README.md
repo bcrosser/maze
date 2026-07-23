@@ -1,19 +1,74 @@
 # Maze
 
-A dependency-free canvas maze with material walls, collectible item strategies, moving monster strategies, and 50-frame pixel-art sprite sheets.
+A playable TypeScript and Phaser checkpoint for a multi-genre game set inside a procedural maze overworld.
+
+## Checkpoint status
+
+The default game currently includes one integrated level loop:
+
+1. Explore a seeded material maze with collectible items, mining, moving monsters, pursuit, combat, pause, and autosave.
+2. Restore coolant routing in a Pipe Dream-style puzzle. Success powers a physical shortcut in the same maze.
+3. Enter that shortcut and pick the archive lock. Success grants persistent mining power, charges, and flight intelligence.
+4. Use the archive uplink to play a lane shoot-em-up. Pipe power becomes shields and lock intelligence shortens the hostile wave requirement.
+5. Return to the repaired elevator for a side-scrolling platformer. Earlier results add bridges, a checkpoint, and a powered lift to its authored level.
+6. When the HUD changes from `Exit Locked 0/4` to `Exit Ready 4/4`, reach the red marker to generate the next larger maze. Higher levels repeat the same integrated sequence so the game can continue indefinitely while more content is developed.
+
+Successes, failures, and abandoned encounters commit typed campaign consequences. Slot 1 autosaves to local storage and restores the maze, player position, items, monsters, upgrades, world systems, encounter history, and altered routes after refresh.
+
+This is not the complete planned game. Distinct later acts, additional lock families, unique level content, final art/audio, settings, save-slot UI, and broader content remain to be built.
+
+## Creative direction
+
+New content should generally follow this mix:
+
+- 30% non-sequitur humor
+- 30% dark-future post-apocalypse
+- 10% original pop-culture homage and memes
+- 30% heart-warming retro-game nostalgia
+
+This applies across the campaign, not to every scene. See [the content guide](docs/content-guide.md) for examples and reference rules.
 
 ## Run
 
-Open `index.html` directly in a browser. No build or local server is required.
+Requirements: Node.js 22 or newer and npm.
 
-- Move with the arrow keys or WASD.
-- Reach the red marker to advance.
-- Health and mining upgrades persist when advancing to a new level.
-- Death regenerates the current level and resets the player to baseline stats.
+```powershell
+npm install
+npm run dev
+```
+
+Open the URL printed by Vite, normally `http://localhost:5173/`. The Phaser campaign is the default. The original single-file game remains temporarily available at `http://localhost:5173/?runtime=legacy` as a parity reference.
+
+For a production build:
+
+```powershell
+npm run build
+npm run preview
+```
+
+## Controls
+
+- Overworld: arrows or WASD; phones display a directional pad.
+- Pipe routing: click/tap a tile to rotate it; arrows select and Enter/Space rotates.
+- Lock: select tension and probe pins by click/tap; arrows select pins, Q/E adjusts tension, and Enter/Space probes.
+- Shooter: arrows or A/D change lanes; Space/Enter or the fire control shoots. Archive intelligence enables auto-fire.
+- Platformer: arrows or A/D move; Up/W/Space jumps. Touch controls appear on the canvas.
+- Escape or the HUD menu pauses where appropriate. Encounter close buttons abandon with a recoverable consequence.
+- Restart Game clears checkpoint slot 1 and starts a fresh campaign.
+
+## Project layout
+
+- `src/domain/`: framework-independent campaign, maze, movement, item, monster, and random-seed rules.
+- `src/encounters/`: validated encounter contracts and atomic result application.
+- `src/minigames/`: pure models and Phaser scenes for Pipe, lock, shooter, and platformer play.
+- `src/scenes/`: the Phaser overworld projection and encounter orchestration.
+- `src/save/`: versioned runtime validation and three-slot local save repository.
+- `tests/unit/`: deterministic domain and minigame tests.
+- `tests/e2e/`: desktop and mobile Playwright campaign flows.
 
 ## Wall materials
 
-`MATERIALS` in `index.html` is the wall-material registry. Each entry has a stable ID, display name, color, tags, and optional mining hardness. The generated maze assigns all 24 materials to clustered wall regions.
+`MATERIALS` in `src/domain/materials/materials.ts` is the typed wall-material registry. Each entry has a stable ID, display name, color, tags, and optional mining hardness. The generated maze assigns all 24 materials to clustered wall regions. The inline legacy runtime retains a mirrored registry until it is retired.
 
 Gameplay should query materials through `getWallMaterial()` or `getAdjacentWallMaterials()`. Compare IDs, tags, or hardness rather than rendered colors. To add a material:
 
@@ -120,10 +175,17 @@ Strategy registry objects are shared and should remain stateless. Put mutable ti
 
 ## Validation
 
-Run the dependency-free smoke test after changing materials, catalogs, types, or strategies:
+Run the normal checkpoint gate:
 
 ```powershell
-node .\scripts\smoke-test.mjs
+npm run check
 ```
 
-It executes the inline game with lightweight browser stubs and checks sprite loading/drawing, catalog order, all 24 material regions, non-overlapping entity placement, strategy attachment, healing, mining, hot-wall attack damage, level progression, and death reset.
+Run the complete desktop/mobile acceptance gate:
+
+```powershell
+npx playwright install chromium
+npm run check:all
+```
+
+`npm run check` covers strict TypeScript, deterministic unit tests, the original runtime parity suite, and a production Vite build. `npm run test:e2e` covers default launch, nonblank WebGL rendering, keyboard/touch movement, pause, save/reload, success/failure/retry behavior, all four genres, and the complete Act I chain on desktop and mobile viewports.

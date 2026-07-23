@@ -35,6 +35,7 @@
             display: grid;
             justify-items: center;
             gap: 10px;
+            width: min(78vmin, calc(100dvh - 132px), 900px);
         }
         #hud {
             position: relative;
@@ -42,7 +43,7 @@
             flex-wrap: wrap;
             justify-content: center;
             gap: 8px 18px;
-            width: min(78vmin, 900px);
+            width: 100%;
             padding: 8px 48px;
             border: 1px solid var(--line);
             background: var(--panel);
@@ -55,9 +56,14 @@
             color: var(--accent);
             font-weight: 700;
         }
+        #canvas-stage {
+            width: 100%;
+            aspect-ratio: 1;
+            line-height: 0;
+        }
         canvas {
-            width: min(78vmin, 900px);
-            height: min(78vmin, 900px);
+            width: 100%;
+            height: 100%;
             border: 2px solid #d5d0be;
             background: #f4f1e8;
             image-rendering: pixelated;
@@ -161,7 +167,7 @@
     <div id="overlay-backdrop" class="overlay-backdrop"></div>
     <div id="start-panel" class="overlay-panel" role="dialog" aria-modal="true" aria-labelledby="start-title">
         <h1 id="start-title">Maze</h1>
-        <p class="hint">Navigate the dungeon, mine walls, defeat monsters.</p>
+        <p class="hint">Cross the ruins. Repair what still remembers how to work.</p>
         <button id="start-btn" type="button">Start Game</button>
     </div>
 
@@ -178,7 +184,7 @@
     <div id="overlay-backdrop-win" class="overlay-backdrop hidden"></div>
     <div id="win-panel" class="overlay-panel hidden" role="dialog" aria-modal="true" aria-labelledby="win-title">
         <h1 id="win-title">You Win!</h1>
-        <p class="hint">You conquered the entire maze.</p>
+        <p class="hint" id="win-hint">You conquered the entire maze.</p>
         <button id="play-again-btn" type="button">Play Again</button>
     </div>
 
@@ -189,13 +195,17 @@
                 <span><span class="stat-label">Level</span> <span class="stat-value" id="level">1</span></span>
                 <span><span class="stat-label">Health</span> <span class="stat-value" id="health">10 / 10</span></span>
                 <span><span class="stat-label">Mining</span> <span class="stat-value" id="mining">0 (0)</span></span>
+                <span><span class="stat-label">Exit</span> <span class="stat-value" id="exit-status">Locked 0 / 4</span></span>
                 <button id="menu-toggle-btn" class="hidden" type="button" aria-label="Open menu" aria-controls="pause-panel" aria-expanded="false">☰</button>
             </div>
-            <canvas id="canvas" aria-label="Maze game. Use arrow keys or WASD to move."></canvas>
+            <div id="canvas-stage">
+                <canvas id="canvas" aria-label="Maze game. Use arrow keys or WASD to move."></canvas>
+            </div>
             <p id="message" aria-live="polite"></p>
         </main>
     </div>
 
+    <script type="module" src="/src/main.ts"></script>
     <script>
         const canvas = document.getElementById('canvas');
         const ctx = canvas.getContext('2d');
@@ -1098,8 +1108,11 @@
 
         // --- Menu event wiring ---
         startBtn.addEventListener('click', event => {
+            if (canvas.dataset?.runtime === 'phaser') return;
             event.stopPropagation();
             if (gameState !== 'menu') return;
+            spriteSheets.item.source = canvas.dataset?.itemSpriteSource || spriteSheets.item.source;
+            spriteSheets.monster.source = canvas.dataset?.monsterSpriteSource || spriteSheets.monster.source;
             hideStartScreen();
             initializeGame();
         });
@@ -1110,6 +1123,7 @@
         });
 
         restartBtn.addEventListener('click', event => {
+            if (canvas.dataset?.runtime === 'phaser') return;
             event.stopPropagation();
             restartGame();
         });
@@ -1124,6 +1138,7 @@
         });
 
         playAgainBtn.addEventListener('click', event => {
+            if (canvas.dataset?.runtime === 'phaser') return;
             event.stopPropagation();
             restartGame();
         });
