@@ -367,16 +367,16 @@
                 spriteId: 'moss-slime',
                 strategyId: 'wander',
                 fallbackColor: '#55a33f',
-                moveDelay: 650,
-                attackCooldown: 900
+                moveDelay: 2000,
+                attackCooldown: 1000
             }),
             emberHound: Object.freeze({
                 label: 'Ember Hound',
                 spriteId: 'ember-hound',
                 strategyId: 'fireHunter',
                 fallbackColor: '#ef5b24',
-                moveDelay: 420,
-                attackCooldown: 800
+                moveDelay: 1500,
+                attackCooldown: 1500
             })
         });
         let level = 1;
@@ -384,7 +384,7 @@
         let maze;
         let player = createPlayer();
         let lastMoveTime = 0;
-        const MOVE_DELAY = 100;
+        const MOVE_DELAY = 200;
         const keys = {};
         let items = [];
         let monsters = [];
@@ -751,7 +751,7 @@
         function damagePlayer(amount, now, sourceLabel) {
             if (now < player.invulnerableUntil) return false;
             player.health = Math.max(0, player.health - amount);
-            player.invulnerableUntil = now + 600;
+            player.invulnerableUntil = now + 1000;
             updateHud();
             setStatus(`${sourceLabel} dealt ${amount} damage.`);
             return true;
