@@ -1,6 +1,6 @@
 {
   "name": "maze",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -10,10 +10,9 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:legacy": "node scripts/smoke-test.mjs",
     "test:e2e": "playwright test",
-    "assets:generate": "node scripts/generate-sprites.mjs",
-    "check": "npm run typecheck && npm run test && npm run test:legacy && npm run build",
+    "assets:generate": "node scripts/generate-sprites.mjs && node scripts/generate-objective-sprites.mjs && node scripts/generate-space-sprites.mjs",
+    "check": "npm run typecheck && npm run test && npm run build",
     "check:all": "npm run check && npm run test:e2e"
   },
   "dependencies": {

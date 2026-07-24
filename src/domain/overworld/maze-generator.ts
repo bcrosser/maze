@@ -9,11 +9,16 @@ import {
     type WallCell
 } from './maze-types';
 
+export const MAZE_GENERATOR_ID = 'wilson-v1' as const;
+/** @deprecated Persist MAZE_GENERATOR_ID instead. */
 export const MAZE_GENERATOR_VERSION = 1;
 
 export interface MazeGenerationOptions {
     readonly size: number;
-    readonly random: RandomSource;
+    /** Backward-compatible shared source. New callers pass independent sources. */
+    readonly random?: RandomSource;
+    readonly topologyRandom?: RandomSource;
+    readonly materialRandom?: RandomSource;
     readonly materialIds?: readonly MaterialId[];
 }
 
@@ -120,6 +125,11 @@ export function assignWallMaterials(
 }
 
 export function generateMaze(options: MazeGenerationOptions): MazeGrid {
-    const topology = generateMazeTopology(options.size, options.random);
-    return assignWallMaterials(topology, options.random, options.materialIds ?? MATERIAL_IDS);
+    const topologyRandom = options.topologyRandom ?? options.random;
+    const materialRandom = options.materialRandom ?? options.random;
+    if (!topologyRandom || !materialRandom) {
+        throw new Error('Maze generation requires topology and material random sources.');
+    }
+    const topology = generateMazeTopology(options.size, topologyRandom);
+    return assignWallMaterials(topology, materialRandom, options.materialIds ?? MATERIAL_IDS);
 }

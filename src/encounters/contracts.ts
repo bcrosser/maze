@@ -28,10 +28,16 @@ const mazeCellSchema = z.discriminatedUnion('kind', [
     z.object({kind: z.literal('wall'), materialId: materialIdSchema}).strict()
 ]);
 
+export const ENCOUNTER_FAILURE_REASONS = ['warden-escaped'] as const;
+
 export const outcomeEffectSchema = z.discriminatedUnion('kind', [
     z.object({
         kind: z.literal('change-resource'),
         resource: z.enum(RESOURCE_KEYS),
+        delta: safeInteger
+    }).strict(),
+    z.object({
+        kind: z.literal('change-money'),
         delta: safeInteger
     }).strict(),
     z.object({
@@ -52,6 +58,10 @@ export const outcomeEffectSchema = z.discriminatedUnion('kind', [
         cell: mazeCellSchema
     }).strict(),
     z.object({
+        kind: z.literal('open-pipe-shortcut'),
+        position: coordinateSchema
+    }).strict(),
+    z.object({
         kind: z.literal('set-trigger-state'),
         triggerId: z.string().min(1),
         state: z.enum(TRIGGER_STATES)
@@ -67,10 +77,12 @@ export const encounterResultSchema = z.object({
     grade: z.enum(PERFORMANCE_GRADES),
     score: z.number().finite().nonnegative(),
     elapsedMs: z.number().finite().nonnegative(),
+    failureReason: z.enum(ENCOUNTER_FAILURE_REASONS).optional(),
     effects: z.array(outcomeEffectSchema).max(100)
 }).strict();
 
 export type OutcomeEffect = z.infer<typeof outcomeEffectSchema>;
+export type EncounterFailureReason = (typeof ENCOUNTER_FAILURE_REASONS)[number];
 export type EncounterResult = z.infer<typeof encounterResultSchema>;
 
 export type DifficultyPreset = 'story' | 'standard' | 'expert';

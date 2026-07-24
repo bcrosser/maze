@@ -16,14 +16,24 @@
         * {
             box-sizing: border-box;
         }
+        html {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+        }
         body {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            min-height: 100vh;
+            width: 100%;
+            height: 100vh;
+            height: 100dvh;
+            min-height: 0;
             margin: 0;
-            padding: 16px;
+            padding:
+                max(2px, env(safe-area-inset-top))
+                max(2px, env(safe-area-inset-right))
+                max(2px, env(safe-area-inset-bottom))
+                max(2px, env(safe-area-inset-left));
+            overflow: hidden;
+            overscroll-behavior: none;
             background:
                 linear-gradient(135deg, rgba(255, 255, 255, 0.035) 25%, transparent 25%) 0 0 / 24px 24px,
                 linear-gradient(315deg, rgba(255, 255, 255, 0.025) 25%, transparent 25%) 0 0 / 24px 24px,
@@ -31,124 +41,181 @@
             color: var(--ink);
             font-family: Georgia, 'Times New Roman', serif;
         }
+        #game-wrapper {
+            position: relative;
+            display: grid;
+            width: 100%;
+            height: 100%;
+            min-width: 0;
+            min-height: 0;
+            place-items: center;
+        }
         main {
             display: grid;
-            justify-items: center;
-            gap: 10px;
-            width: min(78vmin, calc(100dvh - 132px), 900px);
+            grid-template:
+                "hud" auto
+                "stage" minmax(0, 1fr)
+                "message" auto
+                / minmax(0, 1fr);
+            gap: clamp(2px, 0.65vmin, 6px);
+            width: min(100%, 1200px);
+            height: 100%;
+            min-width: 0;
+            min-height: 0;
         }
         #hud {
+            grid-area: hud;
             position: relative;
-            display: flex;
-            flex-wrap: wrap;
-            justify-content: center;
-            gap: 8px 18px;
+            display: grid;
+            grid-template-columns: repeat(5, minmax(0, 1fr));
+            gap: 2px clamp(3px, 1vw, 12px);
+            align-items: center;
             width: 100%;
-            padding: 8px 48px;
+            min-width: 0;
+            min-height: 0;
+            padding: 3px 50px 3px 6px;
+            overflow: hidden;
             border: 1px solid var(--line);
             background: var(--panel);
+            font-size: clamp(10px, 2.6vw, 14px);
             font-variant-numeric: tabular-nums;
+            line-height: 1.1;
+        }
+        .hud-stat {
+            display: flex;
+            min-width: 0;
+            align-items: baseline;
+            justify-content: center;
+            gap: 0.32em;
+            white-space: nowrap;
         }
         .stat-label {
             color: var(--muted);
+            font-size: 0.78em;
+            letter-spacing: 0.035em;
+            text-transform: uppercase;
         }
         .stat-value {
+            min-width: 0;
+            overflow: hidden;
             color: var(--accent);
             font-weight: 700;
+            text-overflow: ellipsis;
         }
         #canvas-stage {
-            width: 100%;
-            aspect-ratio: 1;
-            line-height: 0;
-        }
-        canvas {
+            grid-area: stage;
+            display: grid;
             width: 100%;
             height: 100%;
+            min-width: 0;
+            min-height: 0;
+            overflow: hidden;
+            place-items: center;
+            line-height: 0;
+            container-type: size;
+        }
+        #canvas-stage canvas {
+            display: block;
+            width: min(100cqw, 100cqh) !important;
+            height: min(100cqw, 100cqh) !important;
+            max-width: 100%;
+            max-height: 100%;
+            margin: 0 !important;
+            aspect-ratio: 1;
             border: 2px solid #d5d0be;
             background: #f4f1e8;
             image-rendering: pixelated;
         }
         #message {
-            min-height: 1.4em;
+            grid-area: message;
+            width: 100%;
+            min-width: 0;
+            min-height: 1.3em;
+            max-height: min(28dvh, 7.5em);
             margin: 0;
+            padding: 2px 6px;
+            overflow: auto;
+            overflow-wrap: anywhere;
             color: #dce8a5;
+            font-size: clamp(11px, 2.5vw, 14px);
             font-weight: bold;
+            line-height: 1.2;
+            scrollbar-width: thin;
             text-align: center;
-        }
-
-        /* Menu overlay system */
-        #game-wrapper {
-            position: relative;
-            display: inline-block;
         }
         .hidden {
             display: none !important;
         }
         #menu-toggle-btn {
             position: absolute;
-            top: 50%;
-            right: 4px;
-            transform: translateY(-50%);
+            top: 2px;
+            right: 2px;
             z-index: 10;
-            background: var(--panel);
-            color: var(--ink);
-            border: 1px solid var(--line);
-            font-size: 22px;
-            width: 36px;
-            height: 36px;
             display: flex;
             align-items: center;
             justify-content: center;
-            cursor: pointer;
+            width: 44px;
+            height: 44px;
+            border: 1px solid var(--line);
             border-radius: 4px;
+            background: var(--panel);
+            color: var(--ink);
+            font-size: 22px;
             line-height: 1;
+            cursor: pointer;
         }
         #menu-toggle-btn:hover {
             background: var(--accent);
             color: var(--panel);
         }
+        #menu-toggle-btn:focus-visible {
+            outline: 3px solid #fff4b8;
+            outline-offset: -3px;
+        }
         .overlay-backdrop {
             position: fixed;
             inset: 0;
-            background: rgba(15, 17, 14, 0.75);
             z-index: 20;
+            background: rgba(15, 17, 14, 0.75);
         }
         .overlay-panel {
             position: fixed;
             top: 50%;
             left: 50%;
-            transform: translate(-50%, -50%);
             z-index: 30;
-            background: var(--panel);
+            width: min(94vw, 520px);
+            max-height: calc(100dvh - 12px);
+            padding: clamp(18px, 6vmin, 40px) clamp(18px, 8vmin, 56px);
+            overflow: auto;
+            transform: translate(-50%, -50%);
             border: 1px solid var(--line);
-            padding: 40px 56px;
+            background: var(--panel);
             text-align: center;
-            min-width: 280px;
-            max-width: 90vw;
         }
         .overlay-panel h1 {
             margin-top: 0;
             color: var(--accent);
-            font-size: 3em;
+            font-size: clamp(2rem, 10vmin, 3em);
             letter-spacing: 0.05em;
         }
         .hint {
+            margin-bottom: clamp(16px, 5vmin, 28px);
             color: var(--muted);
             font-size: 0.85em;
-            margin-bottom: 28px;
         }
         .overlay-panel button {
             display: block;
             width: 100%;
-            padding: 14px 24px;
+            min-height: 44px;
             margin: 10px 0;
+            padding: 14px 24px;
+            border: 0;
             background: var(--accent);
             color: var(--panel);
-            border: none;
+            font-family: Georgia, 'Times New Roman', serif;
             font-size: 1.15em;
             font-weight: bold;
             cursor: pointer;
-            font-family: Georgia, 'Times New Roman', serif;
         }
         .overlay-panel button:hover,
         .overlay-panel button:focus-visible {
@@ -157,1025 +224,103 @@
         #overlay-backdrop-pause {
             cursor: pointer;
         }
-        #win-panel h1 {
-            font-size: 2.8em;
+        @media (max-width: 620px) {
+            .hud-stat {
+                flex-direction: column;
+                align-items: center;
+                gap: 0;
+            }
+        }
+        @media (min-aspect-ratio: 4 / 3) {
+            main {
+                grid-template:
+                    "stage hud" minmax(0, 1fr)
+                    "stage message" auto
+                    / minmax(0, 1fr) clamp(176px, 24vw, 288px);
+                width: min(100%, 1280px);
+            }
+            #hud {
+                grid-template-columns: minmax(0, 1fr);
+                grid-auto-rows: min-content;
+                align-content: start;
+                gap: 1px;
+                padding: 50px 6px 4px;
+                overflow: auto;
+                font-size: clamp(10px, 1.6vw, 14px);
+                scrollbar-width: thin;
+            }
+            .hud-stat {
+                flex-direction: row;
+                justify-content: space-between;
+                gap: 8px;
+            }
+            #message {
+                max-height: 35dvh;
+                padding-inline: 5px;
+            }
         }
     </style>
 </head>
 <body>
-    <!-- Start screen (shown on first load) -->
     <div id="overlay-backdrop" class="overlay-backdrop"></div>
-    <div id="start-panel" class="overlay-panel" role="dialog" aria-modal="true" aria-labelledby="start-title">
+    <div
+        id="start-panel"
+        class="overlay-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="start-title"
+    >
         <h1 id="start-title">Maze</h1>
         <p class="hint">Cross the ruins. Repair what still remembers how to work.</p>
         <button id="start-btn" type="button">Start Game</button>
     </div>
 
-    <!-- Pause / Menu overlay -->
     <div id="overlay-backdrop-pause" class="overlay-backdrop hidden"></div>
-    <div id="pause-panel" class="overlay-panel hidden" role="dialog" aria-modal="true" aria-labelledby="pause-title">
+    <div
+        id="pause-panel"
+        class="overlay-panel hidden"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="pause-title"
+    >
         <h1 id="pause-title">Paused</h1>
         <p class="hint">Press Escape or click outside to resume.</p>
         <button id="resume-btn" type="button">Resume</button>
         <button id="restart-btn" type="button">Restart Game</button>
     </div>
 
-    <!-- Win overlay -->
-    <div id="overlay-backdrop-win" class="overlay-backdrop hidden"></div>
-    <div id="win-panel" class="overlay-panel hidden" role="dialog" aria-modal="true" aria-labelledby="win-title">
-        <h1 id="win-title">You Win!</h1>
-        <p class="hint" id="win-hint">You conquered the entire maze.</p>
-        <button id="play-again-btn" type="button">Play Again</button>
-    </div>
-
-    <!-- Game area -->
     <div id="game-wrapper">
         <main class="hidden" id="game-main">
-            <div id="hud" aria-live="polite">
-                <span><span class="stat-label">Level</span> <span class="stat-value" id="level">1</span></span>
-                <span><span class="stat-label">Health</span> <span class="stat-value" id="health">10 / 10</span></span>
-                <span><span class="stat-label">Mining</span> <span class="stat-value" id="mining">0 (0)</span></span>
-                <span><span class="stat-label">Exit</span> <span class="stat-value" id="exit-status">Locked 0 / 4</span></span>
-                <button id="menu-toggle-btn" class="hidden" type="button" aria-label="Open menu" aria-controls="pause-panel" aria-expanded="false">☰</button>
+            <div id="hud" aria-label="Player status">
+                <span class="hud-stat"><span class="stat-label">Level</span> <span class="stat-value" id="level">1</span></span>
+                <span class="hud-stat"><span class="stat-label">Health</span> <span class="stat-value" id="health">10 / 10</span></span>
+                <span class="hud-stat"><span class="stat-label">Objective</span> <span class="stat-value" id="objective">Pipe</span></span>
+                <span class="hud-stat"><span class="stat-label">Exit</span> <span class="stat-value" id="exit-status">Locked 0 / 4</span></span>
+                <span class="hud-stat"><span class="stat-label">Money</span> <span class="stat-value" id="money">$40</span></span>
+                <span class="hud-stat"><span class="stat-label">Weapon</span> <span class="stat-value" id="weapon">Improvised 1</span></span>
+                <span class="hud-stat"><span class="stat-label">Mining</span> <span class="stat-value" id="mining">0 (0)</span></span>
+                <span class="hud-stat"><span class="stat-label">Pack</span> <span class="stat-value" id="backpack">1 / 8</span></span>
+                <span class="hud-stat"><span class="stat-label">Next foe</span> <span class="stat-value" id="reinforcement">30–60s</span></span>
+                <span class="hud-stat"><span class="stat-label">Status</span> <span class="stat-value" id="player-status">Clear</span></span>
+                <button
+                    id="menu-toggle-btn"
+                    class="hidden"
+                    type="button"
+                    aria-label="Open menu"
+                    aria-controls="pause-panel"
+                    aria-expanded="false"
+                >☰</button>
             </div>
             <div id="canvas-stage">
-                <canvas id="canvas" aria-label="Maze game. Use arrow keys or WASD to move."></canvas>
+                <canvas
+                    id="canvas"
+                    aria-label="Maze game. Use arrow keys or WASD to move."
+                ></canvas>
             </div>
-            <p id="message" aria-live="polite"></p>
+            <p id="message" role="status" aria-live="polite" aria-atomic="true"></p>
         </main>
     </div>
 
     <script type="module" src="/src/main.ts"></script>
-    <script>
-        const canvas = document.getElementById('canvas');
-        const ctx = canvas.getContext('2d');
-        const levelElement = document.getElementById('level');
-        const healthElement = document.getElementById('health');
-        const miningElement = document.getElementById('mining');
-        const messageElement = document.getElementById('message');
-
-        // Menu / overlay DOM references
-        const startBackdrop = document.getElementById('overlay-backdrop');
-        const startPanel = document.getElementById('start-panel');
-        const startBtn = document.getElementById('start-btn');
-        const pauseBackdrop = document.getElementById('overlay-backdrop-pause');
-        const pausePanel = document.getElementById('pause-panel');
-        const resumeBtn = document.getElementById('resume-btn');
-        const restartBtn = document.getElementById('restart-btn');
-        const winBackdrop = document.getElementById('overlay-backdrop-win');
-        const winPanel = document.getElementById('win-panel');
-        const playAgainBtn = document.getElementById('play-again-btn');
-        const menuToggleBtn = document.getElementById('menu-toggle-btn');
-        const gameMain = document.getElementById('game-main');
-
-        // Game state: 'menu' | 'loading' | 'playing' | 'paused' | 'won'
-        let gameState = 'menu';
-        let pauseReason = null;
-
-        function setOverlayVisible(panel, backdrop, isVisible) {
-            panel.classList.toggle('hidden', !isVisible);
-            backdrop.classList.toggle('hidden', !isVisible);
-        }
-
-        function clearMovementKeys() {
-            for (const key of Object.keys(keys)) keys[key] = false;
-        }
-
-        function showStartScreen() {
-            setOverlayVisible(startPanel, startBackdrop, true);
-            setOverlayVisible(pausePanel, pauseBackdrop, false);
-            setOverlayVisible(winPanel, winBackdrop, false);
-            menuToggleBtn.classList.add('hidden');
-            menuToggleBtn.setAttribute('aria-expanded', 'false');
-            gameMain.classList.add('hidden');
-            gameState = 'menu';
-        }
-
-        function hideStartScreen() {
-            setOverlayVisible(startPanel, startBackdrop, false);
-            gameMain.classList.remove('hidden');
-        }
-
-        function openMenu(reason = 'menu') {
-            if (gameState !== 'playing') return;
-            clearMovementKeys();
-            pauseReason = reason;
-            setOverlayVisible(pausePanel, pauseBackdrop, true);
-            menuToggleBtn.classList.add('hidden');
-            menuToggleBtn.setAttribute('aria-expanded', 'true');
-            gameState = 'paused';
-        }
-
-        function closeMenu({restoreFocus = true} = {}) {
-            if (gameState !== 'paused') return;
-            setOverlayVisible(pausePanel, pauseBackdrop, false);
-            pauseReason = null;
-            menuToggleBtn.classList.remove('hidden');
-            menuToggleBtn.setAttribute('aria-expanded', 'false');
-            gameState = 'playing';
-            if (restoreFocus) menuToggleBtn.focus();
-        }
-
-        function showWinOverlay() {
-            clearMovementKeys();
-            setOverlayVisible(pausePanel, pauseBackdrop, false);
-            setOverlayVisible(winPanel, winBackdrop, true);
-            menuToggleBtn.classList.add('hidden');
-            menuToggleBtn.setAttribute('aria-expanded', 'false');
-            pauseReason = null;
-            gameState = 'won';
-        }
-
-        const CELL_SIZE = 32;
-        const MAX_SIZE = 99;
-        const SPRITE_LAYOUT = Object.freeze({tileSize: 32, columns: 10, rows: 5, capacity: 50});
-        const ITEM_SPRITE_IDS = Object.freeze([
-            'health-potion', 'mining-pick', 'mana-potion', 'antidote', 'fire-ward',
-            'ice-ward', 'lightning-ward', 'torch', 'lantern', 'iron-key',
-            'gold-key', 'crystal-key', 'compass', 'map-scroll', 'spell-scroll',
-            'tome', 'coin', 'diamond', 'ruby', 'sapphire',
-            'emerald', 'bread', 'apple', 'mushroom', 'meat',
-            'water-flask', 'bomb', 'snare', 'rope', 'shovel',
-            'axe', 'sword', 'dagger', 'spear', 'bow',
-            'arrow-bundle', 'shield', 'helmet', 'boots', 'gloves',
-            'ring', 'amulet', 'crown', 'hourglass', 'mirror',
-            'feather', 'bone', 'seed', 'gear', 'mystery-orb'
-        ]);
-        const MONSTER_SPRITE_IDS = Object.freeze([
-            'moss-slime', 'ember-hound', 'stone-golem', 'vine-crawler', 'skeleton',
-            'specter', 'cave-bat', 'giant-spider', 'tunnel-rat', 'viper',
-            'sporeling', 'frost-wraith', 'storm-wisp', 'water-elemental', 'earth-elemental',
-            'shadow-stalker', 'crystal-beetle', 'iron-beetle', 'scarab', 'cave-raider',
-            'lizard-warrior', 'horned-brute', 'cyclops', 'minotaur', 'harpy',
-            'gargoyle', 'mimic', 'floating-eye', 'tunnel-worm', 'scorpion',
-            'centipede', 'jelly-cube', 'cave-blob', 'fire-elemental', 'lava-serpent',
-            'ice-golem', 'bone-knight', 'dark-knight', 'masked-acolyte', 'witch',
-            'warlock', 'necromancer', 'vampire', 'werewolf', 'zombie',
-            'mummy', 'ember-imp', 'dragon-hatchling', 'hydra-head', 'maze-guardian'
-        ]);
-        const ITEM_SPRITES = Object.freeze(Object.fromEntries(
-            ITEM_SPRITE_IDS.map((spriteId, index) => [spriteId, index])
-        ));
-        const MONSTER_SPRITES = Object.freeze(Object.fromEntries(
-            MONSTER_SPRITE_IDS.map((spriteId, index) => [spriteId, index])
-        ));
-        const spriteSheets = {
-            item: {source: 'assets/item-sprites.png', image: null, ready: false, error: null},
-            monster: {source: 'assets/monster-sprites.png', image: null, ready: false, error: null}
-        };
-        const DIRECTIONS = Object.freeze([
-            Object.freeze({x: 0, y: -1}),
-            Object.freeze({x: 0, y: 1}),
-            Object.freeze({x: -1, y: 0}),
-            Object.freeze({x: 1, y: 0})
-        ]);
-        const MATERIALS = Object.freeze({
-            stone: Object.freeze({name: 'Stone', color: '#73777d', tags: ['mineral'], hardness: 1}),
-            granite: Object.freeze({name: 'Granite', color: '#8a6662', tags: ['mineral'], hardness: 2}),
-            marble: Object.freeze({name: 'Marble', color: '#d9d7cf', tags: ['mineral'], hardness: 2}),
-            obsidian: Object.freeze({name: 'Obsidian', color: '#211b2d', tags: ['mineral', 'magical'], hardness: 4}),
-            crystal: Object.freeze({name: 'Crystal', color: '#67d5e8', tags: ['mineral', 'magical'], hardness: 3}),
-            ice: Object.freeze({name: 'Ice', color: '#a8e5f2', tags: ['cold'], hardness: 1}),
-            glass: Object.freeze({name: 'Glass', color: '#b9ded8', tags: ['mineral'], hardness: 1}),
-            metal: Object.freeze({name: 'Metal', color: '#59636e', tags: ['mineral', 'conductive'], hardness: 3}),
-            copper: Object.freeze({name: 'Copper', color: '#b66a3c', tags: ['mineral', 'conductive'], hardness: 2}),
-            gold: Object.freeze({name: 'Gold', color: '#e8b923', tags: ['mineral', 'conductive'], hardness: 2}),
-            clay: Object.freeze({name: 'Clay', color: '#a85f49', tags: ['earth'], hardness: 1}),
-            earth: Object.freeze({name: 'Earth', color: '#66503a', tags: ['earth', 'organic'], hardness: 1}),
-            sand: Object.freeze({name: 'Sand', color: '#d8be72', tags: ['earth'], hardness: 1}),
-            wood: Object.freeze({name: 'Wood', color: '#81502f', tags: ['organic', 'flammable']}),
-            plants: Object.freeze({name: 'Plants', color: '#3c9b45', tags: ['organic', 'flammable']}),
-            vines: Object.freeze({name: 'Vines', color: '#23713b', tags: ['organic', 'flammable']}),
-            thorns: Object.freeze({name: 'Thorns', color: '#56752d', tags: ['organic', 'flammable', 'sharp']}),
-            fungus: Object.freeze({name: 'Fungus', color: '#a45aa5', tags: ['organic', 'poisonous']}),
-            bone: Object.freeze({name: 'Bone', color: '#e5dfbd', tags: ['organic'], hardness: 1}),
-            water: Object.freeze({name: 'Water', color: '#287ec7', tags: ['wet']}),
-            fire: Object.freeze({name: 'Fire', color: '#ff6a00', tags: ['hot', 'elemental']}),
-            lava: Object.freeze({name: 'Lava', color: '#df2b0b', tags: ['hot', 'elemental']}),
-            lightning: Object.freeze({name: 'Lightning', color: '#f4ed45', tags: ['conductive', 'elemental']}),
-            shadow: Object.freeze({name: 'Shadow', color: '#382f54', tags: ['magical']})
-        });
-        const MATERIAL_IDS = Object.freeze(Object.keys(MATERIALS));
-        const PASSAGE_CELL = Object.freeze({kind: 'passage', materialId: null});
-        const ITEM_TYPES = Object.freeze({
-            healthPotion: Object.freeze({
-                label: 'Health Potion',
-                spriteId: 'health-potion',
-                strategyId: 'healing',
-                fallbackColor: '#d83847'
-            }),
-            miningPick: Object.freeze({
-                label: 'Mining Pick',
-                spriteId: 'mining-pick',
-                strategyId: 'mining',
-                fallbackColor: '#d7a64a'
-            })
-        });
-        const MONSTER_TYPES = Object.freeze({
-            mossSlime: Object.freeze({
-                label: 'Moss Slime',
-                spriteId: 'moss-slime',
-                strategyId: 'wander',
-                fallbackColor: '#55a33f',
-                moveDelay: 2000,
-                attackCooldown: 1000
-            }),
-            emberHound: Object.freeze({
-                label: 'Ember Hound',
-                spriteId: 'ember-hound',
-                strategyId: 'fireHunter',
-                fallbackColor: '#ef5b24',
-                moveDelay: 1500,
-                attackCooldown: 1500
-            })
-        });
-        let level = 1;
-        let size = 21;
-        let maze;
-        let player = createPlayer();
-        let lastMoveTime = 0;
-        const MOVE_DELAY = 200;
-        const keys = {};
-        let items = [];
-        let monsters = [];
-        let nextEntityId = 1;
-        let statusExpiresAt = Infinity;
-
-        function createPlayer() {
-            return {
-                x: 1,
-                y: 1,
-                health: 10,
-                maxHealth: 10,
-                miningPower: 0,
-                miningCharges: 0,
-                invulnerableUntil: 0
-            };
-        }
-
-        function generateMazeTopology() {
-            const grid = Array(size).fill(null).map(() => Array(size).fill(1));
-            
-            for (let y = 1; y < size; y += 2) {
-                for (let x = 1; x < size; x += 2) {
-                    grid[y][x] = 0;
-                }
-            }
-
-            const visited = new Set();
-            visited.add('1,1');
-            grid[1][1] = 0;
-
-            for (let y = 1; y < size; y += 2) {
-                for (let x = 1; x < size; x += 2) {
-                    if (visited.has(`${x},${y}`)) continue;
-
-                    let cx = x, cy = y;
-                    const path = [{x: cx, y: cy}];
-
-                    while (!visited.has(`${cx},${cy}`)) {
-                        const dirs = [];
-                        if (cx > 1) dirs.push({x: cx - 2, y: cy, dx: -1, dy: 0});
-                        if (cx < size - 2) dirs.push({x: cx + 2, y: cy, dx: 1, dy: 0});
-                        if (cy > 1) dirs.push({x: cx, y: cy - 2, dx: 0, dy: -1});
-                        if (cy < size - 2) dirs.push({x: cx, y: cy + 2, dx: 0, dy: 1});
-
-                        const next = dirs[Math.floor(Math.random() * dirs.length)];
-                        cx = next.x;
-                        cy = next.y;
-
-                        const idx = path.findIndex(p => p.x === cx && p.y === cy);
-                        if (idx !== -1) {
-                            path.length = idx + 1;
-                        } else {
-                            path.push({x: cx, y: cy, dx: next.dx, dy: next.dy});
-                        }
-                    }
-
-                    for (let i = 0; i < path.length; i++) {
-                        const cell = path[i];
-                        visited.add(`${cell.x},${cell.y}`);
-                        grid[cell.y][cell.x] = 0;
-
-                        if (i > 0) {
-                            const prev = path[i - 1];
-                            const wallX = (cell.x + prev.x) / 2;
-                            const wallY = (cell.y + prev.y) / 2;
-                            grid[wallY][wallX] = 0;
-                        }
-                    }
-                }
-            }
-
-            return grid;
-        }
-
-        function shuffle(values) {
-            for (let index = values.length - 1; index > 0; index--) {
-                const swapIndex = Math.floor(Math.random() * (index + 1));
-                [values[index], values[swapIndex]] = [values[swapIndex], values[index]];
-            }
-            return values;
-        }
-
-        function assignWallMaterials(topology) {
-            const wallPositions = [];
-
-            for (let y = 0; y < size; y++) {
-                for (let x = 0; x < size; x++) {
-                    if (topology[y][x] === 1) wallPositions.push({x, y});
-                }
-            }
-
-            const seedPositions = shuffle([...wallPositions]).slice(0, MATERIAL_IDS.length);
-            const seeds = seedPositions.map((position, index) => ({
-                ...position,
-                materialId: MATERIAL_IDS[index]
-            }));
-
-            return topology.map((row, y) => row.map((value, x) => {
-                if (value === 0) return PASSAGE_CELL;
-
-                let nearestSeed = seeds[0];
-                let nearestDistance = Infinity;
-
-                for (const seed of seeds) {
-                    const distance = Math.abs(seed.x - x) + Math.abs(seed.y - y);
-                    if (distance < nearestDistance) {
-                        nearestDistance = distance;
-                        nearestSeed = seed;
-                    }
-                }
-
-                return Object.freeze({kind: 'wall', materialId: nearestSeed.materialId});
-            }));
-        }
-
-        function generateMaze() {
-            return assignWallMaterials(generateMazeTopology());
-        }
-
-        function getCell(x, y) {
-            if (x < 0 || x >= size || y < 0 || y >= size) return null;
-            return maze[y][x];
-        }
-
-        function isPassable(x, y) {
-            return getCell(x, y)?.kind === 'passage';
-        }
-
-        function getWallMaterial(x, y) {
-            const cell = getCell(x, y);
-            return cell?.kind === 'wall' ? MATERIALS[cell.materialId] : null;
-        }
-
-        function getAdjacentWallMaterials(x, y) {
-            return DIRECTIONS
-                .map(direction => getWallMaterial(x + direction.x, y + direction.y))
-                .filter(Boolean);
-        }
-
-        const ITEM_STRATEGIES = Object.freeze({
-            healing: Object.freeze({
-                onPickup(context) {
-                    const restoredHealth = Math.min(4, context.player.maxHealth - context.player.health);
-                    context.player.health += restoredHealth;
-                    context.updateHud();
-                    context.setStatus(restoredHealth > 0
-                        ? `${context.type.label} restored ${restoredHealth} health.`
-                        : `${context.type.label} was consumed, but health was already full.`);
-                    return true;
-                }
-            }),
-            mining: Object.freeze({
-                onPickup(context) {
-                    context.player.miningPower = Math.max(context.player.miningPower, 2);
-                    context.player.miningCharges += 6;
-                    context.updateHud();
-                    context.setStatus(`${context.type.label} granted 6 mining charges.`);
-                    return true;
-                }
-            })
-        });
-
-        const MONSTER_STRATEGIES = Object.freeze({
-            wander: Object.freeze({
-                update(context) {
-                    const nextStep = context.chooseRandomStep();
-                    if (nextStep) context.moveTo(nextStep);
-                },
-                onContact(context) {
-                    context.damagePlayer(1);
-                }
-            }),
-            fireHunter: Object.freeze({
-                update(context) {
-                    const nextStep = context.findStepTowardPlayer();
-                    if (nextStep) context.moveTo(nextStep);
-                },
-                onContact(context) {
-                    const isNearHotWall = context.adjacentWallMaterials
-                        .some(material => material.tags.includes('hot'));
-                    context.damagePlayer(isNearHotWall ? 3 : 2);
-                }
-            })
-        });
-
-        function setStatus(message, duration = 2400) {
-            messageElement.textContent = message;
-            statusExpiresAt = duration === Infinity ? Infinity : performance.now() + duration;
-        }
-
-        function updateStatus(now) {
-            if (now >= statusExpiresAt) {
-                messageElement.textContent = '';
-                statusExpiresAt = Infinity;
-            }
-        }
-
-        function updateHud() {
-            levelElement.textContent = level;
-            healthElement.textContent = `${player.health} / ${player.maxHealth}`;
-            miningElement.textContent = `${player.miningPower} (${player.miningCharges})`;
-        }
-
-        function coordinateKey(x, y) {
-            return `${x},${y}`;
-        }
-
-        function parseCoordinateKey(key) {
-            const [x, y] = key.split(',').map(Number);
-            return {x, y};
-        }
-
-        function isStartOrFinish(x, y) {
-            return (x === 1 && y === 1) || (x === size - 2 && y === size - 2);
-        }
-
-        function isPerimeter(x, y) {
-            return x === 0 || y === 0 || x === size - 1 || y === size - 1;
-        }
-
-        function attachItemStrategy(item) {
-            const type = ITEM_TYPES[item.typeId];
-            const strategy = type && ITEM_STRATEGIES[type.strategyId];
-            if (!type || !strategy) throw new Error(`Unknown item strategy for type: ${item.typeId}`);
-            item.strategy = strategy;
-            return item;
-        }
-
-        function attachMonsterStrategy(monster) {
-            const type = MONSTER_TYPES[monster.typeId];
-            const strategy = type && MONSTER_STRATEGIES[type.strategyId];
-            if (!type || !strategy) throw new Error(`Unknown monster strategy for type: ${monster.typeId}`);
-            monster.strategy = strategy;
-            return monster;
-        }
-
-        function getAvailableSpawnPositions() {
-            const positions = [];
-            for (let y = 0; y < size; y++) {
-                for (let x = 0; x < size; x++) {
-                    if (isPassable(x, y) && !isStartOrFinish(x, y)) positions.push({x, y});
-                }
-            }
-            return shuffle(positions);
-        }
-
-        function generateItems(availablePositions) {
-            items = [];
-            const typeIds = Object.keys(ITEM_TYPES);
-            const itemCount = Math.min(Math.floor(size / 5), availablePositions.length);
-
-            for (let index = 0; index < itemCount; index++) {
-                const position = availablePositions.pop();
-                items.push(attachItemStrategy({
-                    id: `item-${nextEntityId++}`,
-                    typeId: typeIds[index % typeIds.length],
-                    ...position
-                }));
-            }
-        }
-
-        function generateMonsters(availablePositions) {
-            monsters = [];
-            const typeIds = Object.keys(MONSTER_TYPES);
-            const monsterCount = Math.min(Math.floor(size / 4), availablePositions.length);
-            const createdAt = performance.now();
-
-            for (let index = 0; index < monsterCount; index++) {
-                const position = availablePositions.pop();
-                const typeId = typeIds[index % typeIds.length];
-                const type = MONSTER_TYPES[typeId];
-                monsters.push(attachMonsterStrategy({
-                    id: `monster-${nextEntityId++}`,
-                    typeId,
-                    ...position,
-                    moveDelay: type.moveDelay,
-                    attackCooldown: type.attackCooldown,
-                    lastMoveAt: createdAt,
-                    lastAttackAt: -Infinity
-                }));
-            }
-        }
-
-        function generateEntities() {
-            const availablePositions = getAvailableSpawnPositions();
-            generateItems(availablePositions);
-            generateMonsters(availablePositions);
-        }
-
-        function getRequestedDirection() {
-            if (keys.arrowup || keys.w) return DIRECTIONS[0];
-            if (keys.arrowdown || keys.s) return DIRECTIONS[1];
-            if (keys.arrowleft || keys.a) return DIRECTIONS[2];
-            if (keys.arrowright || keys.d) return DIRECTIONS[3];
-            return null;
-        }
-
-        function tryMovePlayer(direction) {
-            const targetX = player.x + direction.x;
-            const targetY = player.y + direction.y;
-
-            if (isPassable(targetX, targetY)) {
-                player.x = targetX;
-                player.y = targetY;
-                return true;
-            }
-
-            const material = getWallMaterial(targetX, targetY);
-            if (!material || isPerimeter(targetX, targetY)) return false;
-            if (!material.tags.includes('mineral') || material.hardness === undefined) {
-                setStatus(`${material.name} cannot be mined with this pick.`);
-                return false;
-            }
-            if (player.miningCharges === 0) {
-                setStatus('A mining pick is required to break mineral walls.');
-                return false;
-            }
-            if (material.hardness > player.miningPower) {
-                setStatus(`${material.name} requires mining power ${material.hardness}.`);
-                return false;
-            }
-
-            maze[targetY][targetX] = PASSAGE_CELL;
-            player.miningCharges--;
-            player.x = targetX;
-            player.y = targetY;
-            updateHud();
-            setStatus(`Mined through ${material.name}.`);
-            return true;
-        }
-
-        function updatePlayerMovement(now) {
-            if (now - lastMoveTime < MOVE_DELAY) return false;
-            const direction = getRequestedDirection();
-            if (!direction) return false;
-            lastMoveTime = now;
-            return tryMovePlayer(direction);
-        }
-
-        function collectItemsAtPlayer() {
-            const remainingItems = [];
-
-            for (const item of items) {
-                if (item.x !== player.x || item.y !== player.y) {
-                    remainingItems.push(item);
-                    continue;
-                }
-
-                const type = ITEM_TYPES[item.typeId];
-                const consumed = item.strategy.onPickup({
-                    item,
-                    type,
-                    player,
-                    setStatus,
-                    updateHud
-                });
-                if (!consumed) remainingItems.push(item);
-            }
-
-            items = remainingItems;
-        }
-
-        function damagePlayer(amount, now, sourceLabel) {
-            if (now < player.invulnerableUntil) return false;
-            player.health = Math.max(0, player.health - amount);
-            player.invulnerableUntil = now + 1000;
-            updateHud();
-            setStatus(`${sourceLabel} dealt ${amount} damage.`);
-            return true;
-        }
-
-        function getRandomMonsterStep(monster, occupiedPositions) {
-            const availableSteps = DIRECTIONS
-                .map(direction => ({x: monster.x + direction.x, y: monster.y + direction.y}))
-                .filter(step => isPassable(step.x, step.y))
-                .filter(step => !occupiedPositions.has(coordinateKey(step.x, step.y)));
-
-            return availableSteps[Math.floor(Math.random() * availableSteps.length)] || null;
-        }
-
-        function findStepTowardPlayer(monster) {
-            const startKey = coordinateKey(monster.x, monster.y);
-            const targetKey = coordinateKey(player.x, player.y);
-            if (startKey === targetKey) return null;
-
-            const queue = [{x: monster.x, y: monster.y}];
-            const previous = new Map([[startKey, null]]);
-            let queueIndex = 0;
-
-            while (queueIndex < queue.length && !previous.has(targetKey)) {
-                const current = queue[queueIndex++];
-
-                for (const direction of DIRECTIONS) {
-                    const next = {x: current.x + direction.x, y: current.y + direction.y};
-                    const nextKey = coordinateKey(next.x, next.y);
-                    if (!isPassable(next.x, next.y) || previous.has(nextKey)) continue;
-                    previous.set(nextKey, coordinateKey(current.x, current.y));
-                    queue.push(next);
-                }
-            }
-
-            if (!previous.has(targetKey)) return null;
-            let stepKey = targetKey;
-            while (previous.get(stepKey) !== startKey) {
-                stepKey = previous.get(stepKey);
-                if (stepKey === null) return null;
-            }
-            return parseCoordinateKey(stepKey);
-        }
-
-        function moveMonsterTo(monster, step, occupiedPositions) {
-            const targetKey = coordinateKey(step.x, step.y);
-            if (!isPassable(step.x, step.y) || occupiedPositions.has(targetKey)) return false;
-            occupiedPositions.delete(coordinateKey(monster.x, monster.y));
-            monster.x = step.x;
-            monster.y = step.y;
-            occupiedPositions.add(targetKey);
-            return true;
-        }
-
-        function updateMonsters(now) {
-            const occupiedPositions = new Set(
-                monsters.map(monster => coordinateKey(monster.x, monster.y))
-            );
-
-            for (const monster of monsters) {
-                if (now - monster.lastMoveAt < monster.moveDelay) continue;
-                monster.lastMoveAt = now;
-                monster.strategy.update({
-                    monster,
-                    player,
-                    chooseRandomStep: () => getRandomMonsterStep(monster, occupiedPositions),
-                    findStepTowardPlayer: () => findStepTowardPlayer(monster),
-                    moveTo: step => moveMonsterTo(monster, step, occupiedPositions),
-                    isPassable,
-                    getWallMaterial
-                });
-            }
-        }
-
-        function resolveMonsterContacts(now) {
-            for (const monster of monsters) {
-                if (monster.x !== player.x || monster.y !== player.y) continue;
-                if (now - monster.lastAttackAt < monster.attackCooldown) continue;
-
-                monster.lastAttackAt = now;
-                const type = MONSTER_TYPES[monster.typeId];
-                monster.strategy.onContact({
-                    monster,
-                    player,
-                    adjacentWallMaterials: getAdjacentWallMaterials(monster.x, monster.y),
-                    damagePlayer: amount => damagePlayer(amount, now, type.label)
-                });
-
-                if (player.health === 0) return true;
-            }
-            return false;
-        }
-
-        function setCanvasSize() {
-            canvas.width = size * CELL_SIZE;
-            canvas.height = size * CELL_SIZE;
-            ctx.imageSmoothingEnabled = false;
-        }
-
-        function startLevel(announcement = '') {
-            maze = generateMaze();
-            generateEntities();
-            player.x = 1;
-            player.y = 1;
-            player.invulnerableUntil = performance.now() + 500;
-            lastMoveTime = 0;
-            setCanvasSize();
-            updateHud();
-            if (announcement) setStatus(announcement);
-        }
-
-        function nextLevel() {
-            level++;
-            size = Math.min(size + 4, MAX_SIZE);
-            startLevel(`Entered level ${level}.`);
-        }
-
-        function restartCurrentLevelAfterDeath() {
-            player = createPlayer();
-            startLevel(`Defeated. Level ${level} restarted with baseline stats.`);
-        }
-
-        function checkLevelCompletion() {
-            if (player.x !== size - 2 || player.y !== size - 2) return false;
-            if (size < MAX_SIZE) {
-                nextLevel();
-            } else {
-                setStatus('Max level reached. You won!', Infinity);
-                showWinOverlay();
-            }
-            return true;
-        }
-
-        function restartGame() {
-            clearMovementKeys();
-            level = 1;
-            size = 21;
-            player = createPlayer();
-            nextEntityId = 1;
-            lastMoveTime = 0;
-            pauseReason = null;
-            setOverlayVisible(pausePanel, pauseBackdrop, false);
-            setOverlayVisible(winPanel, winBackdrop, false);
-            gameMain.classList.remove('hidden');
-            menuToggleBtn.classList.remove('hidden');
-            menuToggleBtn.setAttribute('aria-expanded', 'false');
-            gameState = 'playing';
-            startLevel('Game restarted. Find the red exit.');
-        }
-
-        function validateSpriteCatalog(label, spriteIds, catalog) {
-            const indices = Object.values(catalog);
-            const uniqueIds = new Set(spriteIds);
-            const uniqueIndices = new Set(indices);
-            const allIndicesValid = indices.every(index =>
-                Number.isInteger(index) && index >= 0 && index < SPRITE_LAYOUT.capacity
-            );
-
-            if (spriteIds.length !== SPRITE_LAYOUT.capacity ||
-                uniqueIds.size !== SPRITE_LAYOUT.capacity ||
-                uniqueIndices.size !== SPRITE_LAYOUT.capacity ||
-                !allIndicesValid) {
-                throw new Error(`${label} sprite catalog must contain 50 unique in-range entries.`);
-            }
-        }
-
-        function loadImage(source) {
-            return new Promise((resolve, reject) => {
-                const image = new Image();
-                image.onload = () => resolve(image);
-                image.onerror = () => reject(new Error(`Could not load ${source}.`));
-                image.src = source;
-            });
-        }
-
-        async function loadSpriteSheet(kind) {
-            const sheet = spriteSheets[kind];
-            try {
-                const image = await loadImage(sheet.source);
-                const expectedWidth = SPRITE_LAYOUT.columns * SPRITE_LAYOUT.tileSize;
-                const expectedHeight = SPRITE_LAYOUT.rows * SPRITE_LAYOUT.tileSize;
-                if (image.naturalWidth !== expectedWidth || image.naturalHeight !== expectedHeight) {
-                    throw new Error(`${sheet.source} must be ${expectedWidth}x${expectedHeight} pixels.`);
-                }
-                sheet.image = image;
-                sheet.ready = true;
-                sheet.error = null;
-                return null;
-            } catch (error) {
-                sheet.image = null;
-                sheet.ready = false;
-                sheet.error = error.message;
-                return error.message;
-            }
-        }
-
-        async function loadSpriteSheets() {
-            const errors = [];
-            try {
-                validateSpriteCatalog('Item', ITEM_SPRITE_IDS, ITEM_SPRITES);
-                validateSpriteCatalog('Monster', MONSTER_SPRITE_IDS, MONSTER_SPRITES);
-            } catch (error) {
-                errors.push(error.message);
-            }
-
-            const loadErrors = await Promise.all([
-                loadSpriteSheet('item'),
-                loadSpriteSheet('monster')
-            ]);
-            return errors.concat(loadErrors.filter(Boolean));
-        }
-
-        function drawMaze() {
-            for (let y = 0; y < size; y++) {
-                for (let x = 0; x < size; x++) {
-                    const cell = maze[y][x];
-                    ctx.fillStyle = cell.kind === 'wall'
-                        ? MATERIALS[cell.materialId].color
-                        : '#f4f1e8';
-                    ctx.fillRect(x * CELL_SIZE, y * CELL_SIZE, CELL_SIZE, CELL_SIZE);
-                }
-            }
-
-            ctx.fillStyle = '#3b9c58';
-            ctx.fillRect(CELL_SIZE + 8, CELL_SIZE + 8, CELL_SIZE - 16, CELL_SIZE - 16);
-            ctx.fillStyle = '#ca4338';
-            ctx.fillRect((size - 2) * CELL_SIZE + 8, (size - 2) * CELL_SIZE + 8, CELL_SIZE - 16, CELL_SIZE - 16);
-        }
-
-        function drawSprite(kind, catalog, spriteId, x, y) {
-            const sheet = spriteSheets[kind];
-            const spriteIndex = catalog[spriteId];
-            if (!sheet.ready || !sheet.image || !Number.isInteger(spriteIndex) ||
-                spriteIndex < 0 || spriteIndex >= SPRITE_LAYOUT.capacity) {
-                return false;
-            }
-
-            const sourceX = (spriteIndex % SPRITE_LAYOUT.columns) * SPRITE_LAYOUT.tileSize;
-            const sourceY = Math.floor(spriteIndex / SPRITE_LAYOUT.columns) * SPRITE_LAYOUT.tileSize;
-            ctx.drawImage(
-                sheet.image,
-                sourceX,
-                sourceY,
-                SPRITE_LAYOUT.tileSize,
-                SPRITE_LAYOUT.tileSize,
-                x * CELL_SIZE,
-                y * CELL_SIZE,
-                CELL_SIZE,
-                CELL_SIZE
-            );
-            return true;
-        }
-
-        function drawItems() {
-            for (const item of items) {
-                const type = ITEM_TYPES[item.typeId];
-                if (drawSprite('item', ITEM_SPRITES, type.spriteId, item.x, item.y)) continue;
-                ctx.fillStyle = type.fallbackColor;
-                ctx.fillRect(item.x * CELL_SIZE + 8, item.y * CELL_SIZE + 8, CELL_SIZE - 16, CELL_SIZE - 16);
-            }
-        }
-
-        function drawMonsters() {
-            for (const monster of monsters) {
-                const type = MONSTER_TYPES[monster.typeId];
-                if (drawSprite('monster', MONSTER_SPRITES, type.spriteId, monster.x, monster.y)) continue;
-                ctx.fillStyle = type.fallbackColor;
-                ctx.beginPath();
-                ctx.arc(
-                    monster.x * CELL_SIZE + CELL_SIZE / 2,
-                    monster.y * CELL_SIZE + CELL_SIZE / 2,
-                    CELL_SIZE / 3,
-                    0,
-                    Math.PI * 2
-                );
-                ctx.fill();
-            }
-        }
-
-        function drawPlayer(now) {
-            const isInvulnerable = now < player.invulnerableUntil;
-            if (isInvulnerable && Math.floor(now / 100) % 2 === 0) return;
-            ctx.fillStyle = '#2468d8';
-            ctx.strokeStyle = '#102d66';
-            ctx.lineWidth = 3;
-            ctx.beginPath();
-            ctx.arc(
-                player.x * CELL_SIZE + CELL_SIZE / 2,
-                player.y * CELL_SIZE + CELL_SIZE / 2,
-                CELL_SIZE / 3,
-                0,
-                Math.PI * 2
-            );
-            ctx.fill();
-            ctx.stroke();
-        }
-
-        function drawGame(now) {
-            drawMaze();
-            drawItems();
-            drawMonsters();
-            drawPlayer(now);
-        }
-
-        function gameLoop(now) {
-            updateStatus(now);
-
-            if (gameState === 'playing') {
-                updatePlayerMovement(now);
-                collectItemsAtPlayer();
-
-                if (!checkLevelCompletion()) {
-                    updateMonsters(now);
-                    if (resolveMonsterContacts(now)) restartCurrentLevelAfterDeath();
-                }
-            }
-
-            drawGame(now);
-            requestAnimationFrame(gameLoop);
-        }
-
-        function normalizeMovementKey(key) {
-            return key.toLowerCase();
-        }
-
-        window.addEventListener('keydown', event => {
-            if (event.key === 'Escape') {
-                if (gameState === 'paused') {
-                    closeMenu();
-                    event.preventDefault();
-                    return;
-                }
-            }
-            const key = normalizeMovementKey(event.key);
-            if (gameState !== 'playing') return;
-            if (!['arrowup', 'arrowdown', 'arrowleft', 'arrowright', 'w', 'a', 's', 'd'].includes(key)) return;
-            keys[key] = true;
-            event.preventDefault();
-        });
-
-        window.addEventListener('keyup', event => {
-            keys[normalizeMovementKey(event.key)] = false;
-        });
-
-        // --- Menu event wiring ---
-        startBtn.addEventListener('click', event => {
-            if (canvas.dataset?.runtime === 'phaser') return;
-            event.stopPropagation();
-            if (gameState !== 'menu') return;
-            spriteSheets.item.source = canvas.dataset?.itemSpriteSource || spriteSheets.item.source;
-            spriteSheets.monster.source = canvas.dataset?.monsterSpriteSource || spriteSheets.monster.source;
-            hideStartScreen();
-            initializeGame();
-        });
-
-        resumeBtn.addEventListener('click', event => {
-            event.stopPropagation();
-            closeMenu();
-        });
-
-        restartBtn.addEventListener('click', event => {
-            if (canvas.dataset?.runtime === 'phaser') return;
-            event.stopPropagation();
-            restartGame();
-        });
-
-        menuToggleBtn.addEventListener('click', event => {
-            event.stopPropagation();
-            openMenu('menu');
-        });
-
-        pauseBackdrop.addEventListener('click', () => {
-            closeMenu();
-        });
-
-        playAgainBtn.addEventListener('click', event => {
-            if (canvas.dataset?.runtime === 'phaser') return;
-            event.stopPropagation();
-            restartGame();
-        });
-
-        window.addEventListener('blur', () => {
-            clearMovementKeys();
-            openMenu('blur');
-        });
-
-        window.addEventListener('focus', () => {
-            if (gameState === 'paused' && pauseReason === 'blur') {
-                closeMenu({restoreFocus: false});
-            }
-        });
-
-        async function initializeGame() {
-            if (gameState !== 'menu') return;
-            gameState = 'loading';
-            setStatus('Loading sprite sheets...', Infinity);
-            const assetErrors = await loadSpriteSheets();
-            level = 1;
-            size = 21;
-            player = createPlayer();
-            nextEntityId = 1;
-            lastMoveTime = 0;
-            startLevel();
-            gameState = 'playing';
-            menuToggleBtn.classList.remove('hidden');
-            if (assetErrors.length > 0) {
-                setStatus(`Sprite fallback active: ${assetErrors.join(' ')}`, 7000);
-            } else {
-                setStatus('Find the red exit. Items and monsters are now active.');
-            }
-            requestAnimationFrame(gameLoop);
-        }
-
-        showStartScreen();
-    </script>
 </body>
 </html>

@@ -1,7 +1,8 @@
-import {mkdirSync, rmSync, writeFileSync} from 'node:fs';
+import {existsSync, mkdirSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
 import {dirname, join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {spawnSync} from 'node:child_process';
+import {PNG} from 'pngjs';
 
 const TILE_SIZE = 32;
 const COLUMNS = 10;
@@ -227,7 +228,7 @@ const itemSprites = [
     {name: 'hourglass', draw: () => `${shadow()}${rect(8, 4, 16, 4, '#8b6134')}${rect(8, 25, 16, 4, '#8b6134')}${path('M11 8 H21 C21 13 18 15 16 16 C19 18 21 20 21 25 H11 C11 20 13 18 16 16 C13 14 11 12 11 8 Z', '#d9e1d4', INK, 2)}${polygon('12,22 20,22 16,17', '#e0b750', 'none', 0)}`},
     {name: 'mirror', draw: () => `${shadow()}${ellipse(16, 13, 9, 11, '#83c4d4', '#c6a247', 3)}${path('M11 10 Q16 5 21 8', 'none', '#e8ffff', 2)}${line(16, 24, 16, 29, '#c6a247', 4)}${line(12, 29, 20, 29, '#c6a247', 3)}`},
     {name: 'feather', draw: () => `${shadow()}${path('M7 25 Q9 7 27 4 Q27 19 9 26 Z', '#e7e0c1', INK, 2)}${line(8, 27, 23, 9, '#79694f', 2)}${line(13, 20, 9, 16, '#a9a087', 1)}${line(17, 16, 22, 15, '#a9a087', 1)}`},
-    {name: 'bone', draw: () => `${shadow()}${circle(7, 9, 4, '#e5dec2', INK)}${circle(10, 6, 4, '#e5dec2', INK)}${line(9, 9, 23, 23, '#e5dec2', 6)}${circle(22, 26, 4, '#e5dec2', INK)}${circle(26, 22, 4, '#e5dec2', INK)}`},
+    {name: 'car', draw: () => `${shadow()}${path('M3 21 L6 16 L11 12 H21 L26 17 L29 19 V25 H3 Z', '#d53e42', INK, 2)}${polygon('12,14 20,14 24,18 9,18', '#72cbd5', INK)}${line(16, 14, 16, 18, INK, 1)}${circle(9, 25, 4, '#30343a', INK, 2)}${circle(24, 25, 4, '#30343a', INK, 2)}${circle(9, 25, 1, '#d9dedc', 'none', 0)}${circle(24, 25, 1, '#d9dedc', 'none', 0)}${rect(26, 19, 3, 2, '#ffe06b')}`},
     {name: 'seed', draw: () => `${shadow()}${ellipse(16, 19, 7, 9, '#8b5b2d', INK, 2)}${path('M16 13 Q15 6 8 5 Q8 12 16 13 Z', '#58a24f', INK)}${path('M17 13 Q20 7 26 9 Q24 15 17 13 Z', '#77bd58', INK)}${line(13, 17, 18, 23, '#c89854', 2)}`},
     {name: 'gear', draw: () => `${shadow()}${polygon('13,3 19,3 20,7 24,8 27,6 30,12 26,15 27,19 30,22 26,28 21,25 18,29 12,29 11,25 7,24 4,26 1,20 5,17 4,13 2,10 7,5 11,8', '#8f9693', INK, 2)}${circle(16, 16, 6, '#d1b55d', INK, 2)}${circle(16, 16, 2, INK, 'none', 0)}`},
     {name: 'mystery-orb', draw: () => `${shadow()}${circle(16, 16, 11, '#583794', INK, 2)}${circle(14, 13, 7, '#8958c7', 'none', 0)}${path('M12 11 C12 6 22 6 22 12 C22 17 16 16 16 21', 'none', '#f4e76d', 3)}${circle(16, 25, 2, '#f4e76d', 'none', 0)}${sparkle(10, 9)}`}
@@ -321,8 +322,70 @@ function renderSheet(fileName, entries) {
 
     rmSync(svgPath, {force: true});
     if (result.status !== 0) {
+        if (existsSync(pngPath)) {
+            if (fileName === 'item-sprites') patchPortableCarFrame(pngPath);
+            console.warn(
+                `ImageMagick is unavailable; preserved ${fileName}.png` +
+                (fileName === 'item-sprites' ? ' and patched its Getaway Car frame.' : '.')
+            );
+            return;
+        }
         throw new Error(result.stderr || `ImageMagick failed to render ${fileName}.`);
     }
+}
+
+function patchPortableCarFrame(pngPath) {
+    const image = PNG.sync.read(readFileSync(pngPath));
+    const originX = 6 * TILE_SIZE;
+    const originY = 4 * TILE_SIZE;
+    const rgba = hex => {
+        const value = Number.parseInt(hex.slice(1), 16);
+        return [(value >> 16) & 255, (value >> 8) & 255, value & 255, 255];
+    };
+    const pixel = (x, y, color) => {
+        if (x < 0 || y < 0 || x >= TILE_SIZE || y >= TILE_SIZE) return;
+        const index = ((originY + y) * image.width + originX + x) * 4;
+        image.data[index] = color[0];
+        image.data[index + 1] = color[1];
+        image.data[index + 2] = color[2];
+        image.data[index + 3] = color[3];
+    };
+    const box = (x, y, width, height, color) => {
+        for (let row = y; row < y + height; row++) {
+            for (let column = x; column < x + width; column++) {
+                pixel(column, row, color);
+            }
+        }
+    };
+    const disc = (cx, cy, radius, color) => {
+        for (let y = cy - radius; y <= cy + radius; y++) {
+            for (let x = cx - radius; x <= cx + radius; x++) {
+                if ((x - cx) ** 2 + (y - cy) ** 2 <= radius ** 2) pixel(x, y, color);
+            }
+        }
+    };
+    box(0, 0, TILE_SIZE, TILE_SIZE, [0, 0, 0, 0]);
+    const ink = rgba('#17191d');
+    const red = rgba('#d53e42');
+    const redLight = rgba('#f06a66');
+    const glass = rgba('#72cbd5');
+    const metal = rgba('#d9dedc');
+    const lamp = rgba('#ffe06b');
+    box(4, 25, 25, 3, [14, 18, 22, 90]);
+    box(3, 19, 27, 7, ink);
+    box(5, 17, 23, 8, red);
+    box(8, 14, 17, 4, red);
+    box(11, 11, 11, 3, ink);
+    box(12, 12, 9, 4, glass);
+    box(16, 12, 1, 4, ink);
+    box(6, 18, 18, 2, redLight);
+    box(27, 19, 3, 3, lamp);
+    box(3, 21, 3, 2, metal);
+    disc(9, 25, 4, ink);
+    disc(24, 25, 4, ink);
+    disc(9, 25, 1, metal);
+    disc(24, 25, 1, metal);
+    writeFileSync(pngPath, PNG.sync.write(image));
 }
 
 mkdirSync(assetsDirectory, {recursive: true});

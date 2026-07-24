@@ -68,10 +68,58 @@ function transformCell(
     };
 }
 
+function changeMoney(state: CampaignState, delta: number): CampaignState {
+    const changedValue = state.player.money + delta;
+    if (!Number.isSafeInteger(changedValue)) throw new Error('money exceeded its safe range.');
+    if (changedValue < 0) throw new Error('money cannot become negative.');
+    return {
+        ...state,
+        player: {...state.player, money: changedValue}
+    };
+}
+
+function openPipeShortcut(
+    state: CampaignState,
+    position: {readonly x: number; readonly y: number}
+): CampaignState {
+    const expected = state.overworld.pipeShortcutWall;
+    if (
+        expected === null ||
+        expected.x !== position.x ||
+        expected.y !== position.y
+    ) {
+        throw new Error('Pipe shortcut result does not match the protected wall.');
+    }
+    const {maze} = state.overworld;
+    const cell = maze[position.y]?.[position.x];
+    const mixedParity = position.x % 2 !== position.y % 2;
+    const horizontal = maze[position.y]?.[position.x - 1]?.kind === 'passage' &&
+        maze[position.y]?.[position.x + 1]?.kind === 'passage';
+    const vertical = maze[position.y - 1]?.[position.x]?.kind === 'passage' &&
+        maze[position.y + 1]?.[position.x]?.kind === 'passage';
+    if (
+        cell?.kind !== 'wall' ||
+        !mixedParity ||
+        (!horizontal && !vertical)
+    ) {
+        throw new Error('Protected Pipe shortcut is not a valid passage connector.');
+    }
+    const opened = transformCell(state, position, PASSAGE_CELL);
+    return {
+        ...opened,
+        flags: opened.flags.includes('coolant-routing-restored')
+            ? opened.flags
+            : [...opened.flags, 'coolant-routing-restored'],
+        overworld: {...opened.overworld, pipeShortcutWall: null}
+    };
+}
+
 function applyEffect(state: CampaignState, effect: OutcomeEffect): CampaignState {
     switch (effect.kind) {
         case 'change-resource':
             return changeResource(state, effect.resource, effect.delta);
+        case 'change-money':
+            return changeMoney(state, effect.delta);
         case 'adjust-world-system':
             return adjustWorldSystem(state, effect.system, effect.delta);
         case 'upgrade-mining-power':
@@ -98,6 +146,8 @@ function applyEffect(state: CampaignState, effect: OutcomeEffect): CampaignState
             };
         case 'transform-cell':
             return transformCell(state, effect.position, effect.cell);
+        case 'open-pipe-shortcut':
+            return openPipeShortcut(state, effect.position);
         case 'set-trigger-state':
             return {
                 ...state,
