@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 
 import type {GameShell} from './game-shell';
 import {updatePhaserEncounter, updatePhaserHud} from './game-shell';
+import {installOverworldControlDeck} from './overworld-control-deck';
 import type {CampaignState} from '../domain/campaign/campaign-state';
 import {BlackjackScene} from '../minigames/casino/blackjack.scene';
 import {HoldemScene} from '../minigames/casino/holdem.scene';
@@ -31,6 +32,12 @@ export function createMazeGame(
     shell: GameShell,
     options: CreateMazeGameOptions
 ): Phaser.Game {
+    const controlDeck = installOverworldControlDeck(
+        shell.controlDeck,
+        control => scene.performControl(control),
+        () => shell.menuButton.click()
+    );
+    // `scene` is only reached from callbacks that run after construction.
     const scene = new OverworldScene({
         seed: options.initialCampaign?.campaignSeed ?? options.campaignSeed,
         itemSpriteSheetUrl: options.itemSpriteSheetUrl,
@@ -39,12 +46,13 @@ export function createMazeGame(
         ...(options.initialCampaign ? {initialCampaign: options.initialCampaign} : {}),
         onStateChanged: (state, event) => {
             updatePhaserHud(shell, state, event);
+            controlDeck.setAttackTargeting(scene.attackTargetingActive);
             options.onCampaignChanged?.(state);
         },
         onEncounterChanged: kind => updatePhaserEncounter(shell, kind)
     });
 
-    return new Phaser.Game({
+    const game = new Phaser.Game({
         type: Phaser.WEBGL,
         title: 'Maze',
         version: '0.3.0',
@@ -79,4 +87,7 @@ export function createMazeGame(
             autoCenter: Phaser.Scale.CENTER_BOTH
         }
     });
+
+    game.events.once('destroy', () => controlDeck.destroy());
+    return game;
 }

@@ -5,6 +5,10 @@ import {
     type CampaignState
 } from '../../../src/domain/campaign/campaign-state';
 import {calculateMonsterMoneyDrop} from '../../../src/domain/economy/economy';
+import {
+    MONSTER_DEFINITIONS,
+    MONSTER_TYPE_IDS
+} from '../../../src/domain/entities/monster-types';
 import {initializeLevelContent} from '../../../src/domain/overworld/level-content-generator';
 import {generateMaze} from '../../../src/domain/overworld/maze-generator';
 import {getPassageDistances} from '../../../src/domain/overworld/objective-placement';
@@ -215,5 +219,39 @@ describe('overworld monster reinforcements', () => {
             .toThrow('finite non-negative');
         expect(() => advanceOverworldReinforcements(state, Number.NaN))
             .toThrow('finite non-negative');
+    });
+
+    it('keeps every spawned monster type savable, including the Sentry Eye', () => {
+        for (const typeId of MONSTER_TYPE_IDS) {
+            const definition = MONSTER_DEFINITIONS[typeId];
+            const nextMoveTurn = 4_096 + definition.moveEveryTurns + 1;
+            expect(
+                Number.isSafeInteger(nextMoveTurn),
+                `${definition.label} move cadence overflows the save schema`
+            ).toBe(true);
+        }
+
+        const base = campaign(4_242);
+        const state: CampaignState = {
+            ...base,
+            overworld: {...base.overworld, turn: 96, monsters: []}
+        };
+        const spawned = createReinforcementMonster(state, 0);
+
+        expect(spawned).not.toBeNull();
+        if (!spawned) throw new Error('Expected a reinforcement candidate.');
+        const sentry = {
+            ...spawned,
+            typeId: 'floating-eye' as const,
+            nextMoveTurn: state.overworld.turn +
+                MONSTER_DEFINITIONS['floating-eye'].moveEveryTurns
+        };
+        const saved = campaignStateSchema.safeParse({
+            ...state,
+            overworld: {...state.overworld, monsters: [sentry]}
+        });
+
+        expect(saved.error?.issues ?? []).toEqual([]);
+        expect(saved.success).toBe(true);
     });
 });

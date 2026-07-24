@@ -141,7 +141,11 @@ export const MONSTER_DEFINITIONS = Object.freeze({
         maxHealth: 3,
         armor: 0,
         baseDamage: 2,
-        moveEveryTurns: Number.MAX_SAFE_INTEGER,
+        // The sentry strategy never takes a movement step, so this cadence is
+        // unused. It must stay a small safe integer because spawn code derives
+        // `nextMoveTurn` from it and saved turn counters must remain safe
+        // integers.
+        moveEveryTurns: 1,
         attackCooldownTurns: 4,
         detectionDistance: 6,
         leashDistance: 0,

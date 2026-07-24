@@ -290,7 +290,7 @@ export class ZapperScene extends Phaser.Scene {
         fill.button.on('pointerup', stopFill);
         fill.button.on('pointerout', stopFill);
         fill.button.on('pointerupoutside', stopFill);
-        this.createButton(548, 610, 214, 'SLIDE / HAND OFF', () => {
+        this.createButton(548, 610, 214, 'SLIDE BLASTER', () => {
             this.pendingAction = true;
         }, 54, 0x60408f);
         this.createButton(42, 20, 68, 'EXIT', () => this.finish('abandoned'), 34, 0x743943);
@@ -346,8 +346,8 @@ export class ZapperScene extends Phaser.Scene {
             '1 · Move UP or DOWN to an alien’s laboratory table.\n\n' +
             '2 · Hold FILL until the slime tank reaches 100%.\n\n' +
             '3 · Press SLIDE to send the blaster across that lane. A bad slide costs a life.\n\n' +
-            '4 · The alien assembles it and slides it back. Be in the same lane to catch it.\n\n' +
-            '5 · Press HAND OFF while still in that lane to complete the order.\n\n' +
+            '4 · The alien assembles it and slides it back. Stay in that lane and the catch completes the order for you.\n\n' +
+            '5 · A serviced lane slows down for a moment, so keep working to stay ahead.\n\n' +
             'Finish the quota before three blasters break or aliens reach the service desk.',
             {
                 color: '#eaffdf',
@@ -405,21 +405,16 @@ export class ZapperScene extends Phaser.Scene {
                     this.messageText.setText('COMPLETED BLASTER RETURNING · MATCH ITS LANE');
                     break;
                 case 'return-caught':
-                    this.messageText.setText('CAUGHT · PRESS HAND OFF IN THIS LANE');
+                    this.messageText.setText('CAUGHT · ORDER SIGNED OFF');
                     break;
                 case 'handoff-complete':
                     this.messageText.setText(
-                        `ORDER COMPLETE · ${event.completedOrders}/${event.quota}`
+                        `ORDER COMPLETE · ${event.completedOrders}/${event.quota} · ` +
+                        `LANE ${event.laneIndex + 1} SLOWING`
                     );
                     break;
                 case 'action-rejected':
-                    this.messageText.setText(
-                        event.reason === 'blaster-not-full'
-                            ? 'KEEP FILLING · THE BLASTER IS NOT READY'
-                            : event.reason === 'handoff-wrong-lane'
-                                ? 'FIND THE WAITING ALIEN’S LANE'
-                                : 'THAT CUSTOMER HAS LEFT'
-                    );
+                    this.messageText.setText('KEEP FILLING · THE BLASTER IS NOT READY');
                     break;
                 case 'life-lost':
                     this.messageText.setText(
@@ -443,10 +438,9 @@ export class ZapperScene extends Phaser.Scene {
         const time = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
         const hearts = '♥'.repeat(telemetry.lives) +
             '♡'.repeat(this.state.course.startingLives - telemetry.lives);
-        const held = telemetry.heldCompletedOrderId ? ' · CARRYING RETURN' : '';
         this.hudText.setText(
             `ORDERS ${telemetry.completedOrders}/${telemetry.completionQuota}  ` +
-            `${hearts}  ${time}${held}`
+            `${hearts}  ${time}`
         );
         this.publishTelemetry();
     }
@@ -469,8 +463,13 @@ export class ZapperScene extends Phaser.Scene {
 
         for (let lane = 0; lane < ZAPPER_LANE_COUNT; lane++) {
             const y = laneY(lane);
+            const relieved = (snapshot.laneReliefRemainingMs[lane] ?? 0) > 0;
             graphics.fillStyle(COLORS.counter);
             graphics.fillRoundedRect(35, y - 24, VIEW_SIZE - 65, 48, 9);
+            if (relieved) {
+                graphics.fillStyle(COLORS.cyan, 0.16);
+                graphics.fillRoundedRect(35, y - 24, VIEW_SIZE - 65, 48, 9);
+            }
             graphics.lineStyle(2, lane === this.state.player.laneIndex ? COLORS.slime : COLORS.counterEdge, 0.9);
             graphics.strokeRoundedRect(35, y - 24, VIEW_SIZE - 65, 48, 9);
             graphics.lineStyle(1, COLORS.grid, 0.75);
@@ -521,9 +520,6 @@ export class ZapperScene extends Phaser.Scene {
         graphics.lineBetween(x + 24, y - 5, x + 39, y - 5);
         graphics.fillStyle(this.state.player.fillProgress >= 1 ? COLORS.gold : COLORS.paper);
         graphics.fillTriangle(x + 40, y - 11, x + 54, y - 5, x + 40, y + 1);
-        if (this.state.player.heldCompletedOrderId) {
-            this.drawBlaster(graphics, x + 1, y - 52, true);
-        }
     }
 
     private drawAlien(
@@ -597,7 +593,7 @@ export class ZapperScene extends Phaser.Scene {
         canvas.dataset.zapperLives = String(telemetry.lives);
         canvas.dataset.zapperFill = telemetry.fillProgress.toFixed(3);
         canvas.dataset.zapperReady = String(telemetry.blasterReady);
-        canvas.dataset.zapperHeldOrder = telemetry.heldCompletedOrderId ?? '';
+        canvas.dataset.zapperRelievedLanes = telemetry.relievedLanes.join(',');
         canvas.dataset.zapperCompleted = String(telemetry.completedOrders);
         canvas.dataset.zapperQuota = String(telemetry.completionQuota);
         canvas.dataset.zapperAliens = String(telemetry.activeAliens);
@@ -613,7 +609,7 @@ export class ZapperScene extends Phaser.Scene {
         delete canvas.dataset.zapperLives;
         delete canvas.dataset.zapperFill;
         delete canvas.dataset.zapperReady;
-        delete canvas.dataset.zapperHeldOrder;
+        delete canvas.dataset.zapperRelievedLanes;
         delete canvas.dataset.zapperCompleted;
         delete canvas.dataset.zapperQuota;
         delete canvas.dataset.zapperAliens;

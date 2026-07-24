@@ -59,8 +59,19 @@ shell.startButton.addEventListener('click', async () => {
             spaceAtlasImageUrl,
             spaceAtlasDataUrl,
             onCampaignChanged: state => {
-                saveRepository.save('slot-1', state);
-                window.sessionStorage.removeItem(PENDING_CAMPAIGN_SEED_KEY);
+                // A rejected autosave must never escape into the Phaser render
+                // loop, because an uncaught error there stops the game.
+                try {
+                    saveRepository.save('slot-1', state);
+                    window.sessionStorage.removeItem(PENDING_CAMPAIGN_SEED_KEY);
+                    delete shell.gameMain.dataset.saveError;
+                } catch (error) {
+                    const detail = error instanceof Error
+                        ? error.message
+                        : 'Progress could not be saved.';
+                    shell.gameMain.dataset.saveError = detail;
+                    console.error(error);
+                }
             }
         });
         const canvasStage = canvas.parentElement;

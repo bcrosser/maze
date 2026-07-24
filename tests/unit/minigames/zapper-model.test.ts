@@ -7,6 +7,8 @@ import {
     ZAPPER_FIXED_STEP_MS,
     ZAPPER_IDLE_INPUT,
     ZAPPER_LANE_COUNT,
+    ZAPPER_LANE_RELIEF_MS,
+    ZAPPER_LANE_RELIEF_SPEED_MULTIPLIER,
     ZAPPER_RETURN_MISS_X,
     ZAPPER_SERVICE_X,
     advanceZapper,
@@ -178,6 +180,74 @@ describe('Zapper service loop', () => {
         expect(kinds).toContain('return-caught');
         expect(kinds).toContain('handoff-complete');
         expect(kinds.at(-1)).toBe('success');
+    });
+
+    it('completes an order on the catch without a second press', () => {
+        const course = createZapperCourse(new Mulberry32Random(44), {
+            completionQuota: 1
+        });
+        let state = createZapperState(course);
+        const events: ZapperEvent[] = [];
+        for (let ticks = 0; ticks < 6_000 && state.status === 'active'; ticks++) {
+            const recommended = recommendZapperInput(state);
+            const result = advanceZapper(
+                state,
+                {...recommended, actionPressed: recommended.actionPressed},
+                ZAPPER_FIXED_STEP_MS
+            );
+            state = result.state;
+            events.push(...result.events);
+            const caughtIndex = result.events.findIndex(
+                event => event.kind === 'return-caught'
+            );
+            if (caughtIndex >= 0) {
+                expect(result.events[caughtIndex + 1]?.kind).toBe('handoff-complete');
+                break;
+            }
+        }
+
+        expect(events.map(event => event.kind)).toContain('handoff-complete');
+        expect(state.completedOrders).toBe(1);
+    });
+
+    it('slows a serviced lane for a couple of seconds so the player can catch up', () => {
+        const course = createZapperCourse(new Mulberry32Random(44), {
+            completionQuota: 4
+        });
+        let state = createZapperState(course);
+        let servicedLane: number | null = null;
+        for (let ticks = 0; ticks < 12_000 && servicedLane === null; ticks++) {
+            const result = advanceZapper(
+                state,
+                recommendZapperInput(state),
+                ZAPPER_FIXED_STEP_MS
+            );
+            state = result.state;
+            const completed = result.events.find(
+                event => event.kind === 'handoff-complete'
+            );
+            if (completed?.kind === 'handoff-complete') servicedLane = completed.laneIndex;
+        }
+
+        expect(servicedLane).not.toBeNull();
+        if (servicedLane === null) throw new Error('Expected a completed order.');
+        expect(state.laneReliefRemainingMs[servicedLane]).toBe(ZAPPER_LANE_RELIEF_MS);
+        expect(getZapperTelemetry(state).relievedLanes).toContain(servicedLane);
+
+        const relievedOrder = state.course.orders.find(order =>
+            order.laneIndex === servicedLane
+        )!;
+        const otherOrder = state.course.orders.find(order =>
+            order.laneIndex !== servicedLane
+        )!;
+        const relievedStep = relievedOrder.approachSpeed *
+            ZAPPER_LANE_RELIEF_SPEED_MULTIPLIER;
+        expect(relievedStep).toBeLessThan(relievedOrder.approachSpeed);
+        expect(otherOrder.approachSpeed).toBeGreaterThan(0);
+
+        const cleared = advanceFor(state, ZAPPER_LANE_RELIEF_MS + 100).state;
+        expect(cleared.laneReliefRemainingMs.every(remaining => remaining === 0))
+            .toBe(true);
     });
 
     it('does not launch a half-filled blaster', () => {

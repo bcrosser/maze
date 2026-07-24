@@ -46,7 +46,8 @@ function shellStub(): GameShell {
         objective: elementStub<HTMLElement>(),
         playerStatus: elementStub<HTMLElement>(),
         exitStatus: elementStub<HTMLElement>(),
-        message: elementStub<HTMLElement>()
+        message: elementStub<HTMLElement>(),
+        controlDeck: elementStub<HTMLElement>()
     };
 }
 

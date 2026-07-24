@@ -92,8 +92,21 @@ export const CELL_SIZE = 32;
 export const INITIAL_MAZE_SIZE = 21;
 export const GAME_VIEW_SIZE = INITIAL_MAZE_SIZE * CELL_SIZE;
 const WALKABLE_EDGE_CELL_CENTER = CELL_SIZE * 1.5;
-const IDLE_TOUCH_CONTROL_ALPHA = 0.68;
-const ACTIVE_TOUCH_CONTROL_ALPHA = 0.92;
+/** Smallest comfortable on-screen maze cell, in CSS pixels. */
+const MINIMUM_READABLE_CELL_PX = 26;
+const MAXIMUM_CAMERA_ZOOM = 2;
+
+/**
+ * Overworld actions the surrounding shell can drive from its own on-screen
+ * controls, so touch players are not limited to keyboard input.
+ */
+export type OverworldControl =
+    | {readonly kind: 'move'; readonly direction: DirectionId}
+    | {readonly kind: 'attack-toggle'}
+    | {readonly kind: 'use'}
+    | {readonly kind: 'interact'}
+    | {readonly kind: 'wait'}
+    | {readonly kind: 'inventory'};
 
 export interface OverworldSceneOptions {
     readonly seed: number;
@@ -278,18 +291,20 @@ export class OverworldScene extends Phaser.Scene {
         this.configurePlayerCamera();
 
         this.input.keyboard?.on('keydown', this.handleKeyDown, this);
+        this.scale.on('resize', this.handleScaleResize, this);
         this.events.once('shutdown', () => {
             this.input.keyboard?.off('keydown', this.handleKeyDown, this);
+            this.scale.off('resize', this.handleScaleResize, this);
             this.destroyModal();
             delete this.game.canvas.dataset.campaignVictory;
             delete this.game.canvas.dataset.victoryFanfare;
             delete this.game.canvas.dataset.overworldCameraMode;
+            delete this.game.canvas.dataset.overworldCameraZoom;
             delete this.game.canvas.dataset.overworldCameraPaddingX;
             delete this.game.canvas.dataset.overworldCameraPaddingY;
             delete this.game.canvas.dataset.overworldPlayerScreenX;
             delete this.game.canvas.dataset.overworldPlayerScreenY;
         });
-        this.createTouchControls();
 
         const announcement = this.restartAnnouncement;
         this.restartAnnouncement = undefined;
@@ -1920,6 +1935,9 @@ export class OverworldScene extends Phaser.Scene {
     }
 
     private activateModal(container: Phaser.GameObjects.Container): void {
+        // Modals are laid out in game pixels, so the world zoom used to keep
+        // maze cells readable is cancelled here to stop panels overflowing.
+        container.setScale(1 / this.cameras.main.zoom);
         for (const child of container.list) {
             if (
                 child.input !== null &&
@@ -2102,38 +2120,79 @@ export class OverworldScene extends Phaser.Scene {
 
     private configurePlayerCamera(): void {
         const camera = this.cameras.main;
-        const worldSize = this.campaign.overworld.maze.length * CELL_SIZE;
-        const paddingX = Math.max(0, camera.width / 2 - WALKABLE_EDGE_CELL_CENTER);
-        const paddingY = Math.max(0, camera.height / 2 - WALKABLE_EDGE_CELL_CENTER);
-
         camera.setBackgroundColor(0x242722);
+        camera.setZoom(this.readableCameraZoom());
+        camera.startFollow(this.playerMarker, true, 1, 1);
+        camera.setRoundPixels(true);
+        this.playerCameraConfigured = true;
+        this.applyCameraBounds();
+        this.centerCameraOnPlayer();
+
+        this.game.canvas.dataset.overworldCameraMode = 'player-centered';
+    }
+
+    /**
+     * Small screens shrink every maze cell, so the camera trades visible cells
+     * for legibility until each one is comfortably tappable.
+     */
+    private readableCameraZoom(): number {
+        const displayedWidth = this.game.canvas.getBoundingClientRect().width;
+        if (!Number.isFinite(displayedWidth) || displayedWidth <= 0) return 1;
+        const cssPixelsPerGamePixel = displayedWidth / GAME_VIEW_SIZE;
+        const required = MINIMUM_READABLE_CELL_PX / (CELL_SIZE * cssPixelsPerGamePixel);
+        // Quarter steps keep the zoom stable across small resize jitters.
+        const quantized = Math.ceil(required * 4) / 4;
+        return Math.min(MAXIMUM_CAMERA_ZOOM, Math.max(1, quantized));
+    }
+
+    private applyCameraBounds(): void {
+        const camera = this.cameras.main;
+        const worldSize = this.campaign.overworld.maze.length * CELL_SIZE;
+        const paddingX = Math.max(
+            0,
+            camera.width / 2 / camera.zoom - WALKABLE_EDGE_CELL_CENTER
+        );
+        const paddingY = Math.max(
+            0,
+            camera.height / 2 / camera.zoom - WALKABLE_EDGE_CELL_CENTER
+        );
         camera.setBounds(
             -paddingX,
             -paddingY,
             worldSize + paddingX * 2,
             worldSize + paddingY * 2
         );
-        camera.startFollow(this.playerMarker, true, 1, 1);
-        camera.setRoundPixels(true);
-        this.playerCameraConfigured = true;
-        this.centerCameraOnPlayer();
 
         const canvas = this.game.canvas;
-        canvas.dataset.overworldCameraMode = 'player-centered';
+        canvas.dataset.overworldCameraZoom = camera.zoom.toFixed(2);
         canvas.dataset.overworldCameraPaddingX = String(paddingX);
         canvas.dataset.overworldCameraPaddingY = String(paddingY);
     }
+
+    private readonly handleScaleResize = (): void => {
+        if (!this.playerCameraConfigured) return;
+        const zoom = this.readableCameraZoom();
+        if (zoom === this.cameras.main.zoom) return;
+        this.cameras.main.setZoom(zoom);
+        this.applyCameraBounds();
+        this.modalContainer?.setScale(1 / zoom);
+        this.centerCameraOnPlayer();
+    };
 
     private centerCameraOnPlayer(): void {
         const camera = this.cameras.main;
         camera.centerOn(this.playerMarker.x, this.playerMarker.y);
 
         const canvas = this.game.canvas;
+        const halfWidth = camera.width / 2;
+        const halfHeight = camera.height / 2;
         canvas.dataset.overworldPlayerScreenX = (
-            camera.x + (this.playerMarker.x - camera.scrollX) * camera.zoom
+            camera.x + halfWidth +
+            (this.playerMarker.x - camera.scrollX - halfWidth) * camera.zoom
         ).toFixed(1);
         canvas.dataset.overworldPlayerScreenY = (
-            camera.y + (this.playerMarker.y - camera.scrollY) * camera.zoom
+            camera.y + halfHeight +
+            (this.playerMarker.y - camera.scrollY - halfHeight) * camera.zoom
         ).toFixed(1);
     }
 
@@ -2271,20 +2330,26 @@ export class OverworldScene extends Phaser.Scene {
             this.campaign.overworld.playerPosition.y === size - 2;
     }
 
-    private createTouchControls(): void {
-        const controls: readonly {
-            direction: DirectionId;
-            label: string;
-            x: number;
-            y: number;
-        }[] = [
-            {direction: 'up', label: '\u2191', x: 80, y: GAME_VIEW_SIZE - 154},
-            {direction: 'left', label: '\u2190', x: 28, y: GAME_VIEW_SIZE - 102},
-            {direction: 'down', label: '\u2193', x: 80, y: GAME_VIEW_SIZE - 102},
-            {direction: 'right', label: '\u2192', x: 132, y: GAME_VIEW_SIZE - 102}
-        ];
-        for (const control of controls) {
-            this.createTouchButton(control.x, control.y, control.label, () => {
+    /** True while the player is choosing a direction for a ranged attack. */
+    get attackTargetingActive(): boolean {
+        return this.attackTargeting;
+    }
+
+    /**
+     * Entry point for the shell's on-screen controls. It mirrors the keyboard
+     * bindings, including the two-step targeting flows.
+     */
+    performControl(control: OverworldControl): void {
+        if (
+            this.encounterOpen ||
+            this.modalContainer ||
+            this.campaign.pendingLevelReward ||
+            this.campaign.overworld.pendingDefeatChoice
+        ) {
+            return;
+        }
+        switch (control.kind) {
+            case 'move':
                 if (this.itemTargetingId) {
                     const itemId = this.itemTargetingId;
                     this.itemTargetingId = null;
@@ -2292,67 +2357,33 @@ export class OverworldScene extends Phaser.Scene {
                 } else if (this.attackTargeting) {
                     this.attackTargeting = false;
                     this.perform({kind: 'ranged', direction: control.direction});
-                } else this.perform({kind: 'move', direction: control.direction});
-            });
+                } else {
+                    this.perform({kind: 'move', direction: control.direction});
+                }
+                break;
+            case 'attack-toggle':
+                if (this.itemTargetingId) {
+                    this.itemTargetingId = null;
+                    this.emitState(messageEvent('Item targeting cancelled.'));
+                    break;
+                }
+                this.attackTargeting = !this.attackTargeting;
+                this.emitState(messageEvent(this.attackTargeting
+                    ? 'Choose an attack direction.'
+                    : 'Attack cancelled.'));
+                break;
+            case 'use':
+                this.useQuickSlot();
+                break;
+            case 'interact':
+                this.interact();
+                break;
+            case 'wait':
+                this.perform({kind: 'wait'});
+                break;
+            case 'inventory':
+                this.showInventory();
+                break;
         }
-        this.createTouchButton(GAME_VIEW_SIZE - 60, GAME_VIEW_SIZE - 150, 'ATTACK', () => {
-            this.attackTargeting = !this.attackTargeting;
-            this.emitState(messageEvent(this.attackTargeting
-                ? 'Choose an attack direction.'
-                : 'Attack cancelled.'));
-        }, 92);
-        this.createTouchButton(GAME_VIEW_SIZE - 60, GAME_VIEW_SIZE - 96, 'USE', () =>
-            this.useQuickSlot(), 92);
-        this.createTouchButton(GAME_VIEW_SIZE - 174, GAME_VIEW_SIZE - 96, 'E', () =>
-            this.interact(), 48);
-        this.createTouchButton(GAME_VIEW_SIZE - 174, GAME_VIEW_SIZE - 150, 'WAIT', () =>
-            this.perform({kind: 'wait'}), 70);
-        this.createTouchButton(GAME_VIEW_SIZE - 60, GAME_VIEW_SIZE - 42, 'INV', () =>
-            this.showInventory(), 92);
-    }
-
-    private createTouchButton(
-        x: number,
-        y: number,
-        label: string,
-        callback: () => void,
-        width = 48
-    ): void {
-        const background = this.add.rectangle(
-            x,
-            y,
-            width,
-            48,
-            0x171918,
-            IDLE_TOUCH_CONTROL_ALPHA
-        )
-            .setStrokeStyle(2, 0xefc75e, 0.9)
-            .setScrollFactor(0)
-            .setDepth(200)
-            .setInteractive({useHandCursor: true});
-        const buttonLabel = this.add.text(x, y, label, {
-            color: '#f5f0df',
-            fontFamily: 'Georgia, serif',
-            fontSize: label.length > 2 ? '13px' : '20px'
-        }).setOrigin(0.5).setScrollFactor(0).setDepth(201).setAlpha(0.94);
-        const setControlActive = (active: boolean): void => {
-            background.setFillStyle(
-                active ? 0x262b27 : 0x171918,
-                active ? ACTIVE_TOUCH_CONTROL_ALPHA : IDLE_TOUCH_CONTROL_ALPHA
-            );
-            buttonLabel.setAlpha(active ? 1 : 0.94);
-        };
-        background.on('pointerover', () => setControlActive(true));
-        background.on('pointerout', () => setControlActive(false));
-        background.on('pointerup', () => setControlActive(false));
-        background.on('pointerdown', () => {
-            setControlActive(true);
-            if (
-                this.campaign.overworld.pendingDefeatChoice ||
-                this.campaign.pendingLevelReward ||
-                this.modalContainer
-            ) return;
-            callback();
-        });
     }
 }

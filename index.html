@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Maze</title>
     <style>
         :root {
@@ -10,6 +10,7 @@
             --ink: #f5f0df;
             --muted: #b6b09f;
             --panel: #171918;
+            --panel-raised: #21241f;
             --line: #676b60;
             --accent: #efc75e;
         }
@@ -40,6 +41,9 @@
                 #242722;
             color: var(--ink);
             font-family: Georgia, 'Times New Roman', serif;
+            -webkit-user-select: none;
+            user-select: none;
+            -webkit-tap-highlight-color: transparent;
         }
         #game-wrapper {
             position: relative;
@@ -56,52 +60,95 @@
                 "hud" auto
                 "stage" minmax(0, 1fr)
                 "message" auto
+                "controls" auto
                 / minmax(0, 1fr);
-            gap: clamp(2px, 0.65vmin, 6px);
+            gap: clamp(2px, 0.6vmin, 6px);
             width: min(100%, 1200px);
             height: 100%;
             min-width: 0;
             min-height: 0;
         }
+
+        /* ---------- Status board ---------- */
         #hud {
             grid-area: hud;
             position: relative;
-            display: grid;
-            grid-template-columns: repeat(5, minmax(0, 1fr));
-            gap: 2px clamp(3px, 1vw, 12px);
-            align-items: center;
+            display: flex;
+            flex-direction: column;
+            gap: 3px;
             width: 100%;
             min-width: 0;
             min-height: 0;
-            padding: 3px 50px 3px 6px;
-            overflow: hidden;
+            max-height: 24dvh;
+            padding: 4px 52px 4px 5px;
+            overflow: auto;
             border: 1px solid var(--line);
+            border-radius: 6px;
             background: var(--panel);
-            font-size: clamp(10px, 2.6vw, 14px);
             font-variant-numeric: tabular-nums;
-            line-height: 1.1;
+            line-height: 1.15;
+            scrollbar-width: thin;
+        }
+        .hud-row {
+            display: grid;
+            gap: 3px;
+            min-width: 0;
+        }
+        .hud-row-primary {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            font-size: clamp(12px, 3.4vw, 17px);
+        }
+        .hud-row-secondary {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            font-size: clamp(10px, 2.6vw, 13px);
         }
         .hud-stat {
-            display: flex;
+            display: grid;
+            grid-template-columns: auto minmax(0, 1fr);
+            gap: 0 0.4em;
+            align-items: center;
             min-width: 0;
-            align-items: baseline;
-            justify-content: center;
-            gap: 0.32em;
-            white-space: nowrap;
+            padding: 2px 5px;
+            border-left: 3px solid var(--stat-accent, var(--accent));
+            border-radius: 4px;
+            background: var(--panel-raised);
+        }
+        .stat-icon {
+            grid-row: span 2;
+            color: var(--stat-accent, var(--accent));
+            font-size: 1.15em;
+            line-height: 1;
         }
         .stat-label {
             color: var(--muted);
-            font-size: 0.78em;
-            letter-spacing: 0.035em;
+            font-size: 0.68em;
+            letter-spacing: 0.06em;
             text-transform: uppercase;
+            white-space: nowrap;
         }
         .stat-value {
             min-width: 0;
             overflow: hidden;
-            color: var(--accent);
+            color: var(--ink);
             font-weight: 700;
             text-overflow: ellipsis;
+            white-space: nowrap;
         }
+        .hud-row-primary .stat-value {
+            color: var(--stat-accent, var(--accent));
+        }
+        [data-stat="health"] { --stat-accent: #ff7a70; }
+        [data-stat="objective"] { --stat-accent: #6fd3ff; }
+        [data-stat="exit"] { --stat-accent: #8fd66a; }
+        [data-stat="money"] { --stat-accent: #efc75e; }
+        [data-stat="level"] { --stat-accent: #cfd3c4; }
+        [data-stat="weapon"] { --stat-accent: #ff9d5c; }
+        [data-stat="mining"] { --stat-accent: #c9a77a; }
+        [data-stat="pack"] { --stat-accent: #a8b0a2; }
+        [data-stat="reinforcement"] { --stat-accent: #ef7ad0; }
+        [data-stat="status"] { --stat-accent: #b78cff; }
+
+        /* ---------- Stage ---------- */
         #canvas-stage {
             grid-area: stage;
             display: grid;
@@ -125,31 +172,157 @@
             border: 2px solid #d5d0be;
             background: #f4f1e8;
             image-rendering: pixelated;
+            touch-action: none;
         }
         #message {
             grid-area: message;
             width: 100%;
             min-width: 0;
             min-height: 1.3em;
-            max-height: min(28dvh, 7.5em);
+            max-height: min(22dvh, 6em);
             margin: 0;
             padding: 2px 6px;
             overflow: auto;
             overflow-wrap: anywhere;
             color: #dce8a5;
-            font-size: clamp(11px, 2.5vw, 14px);
+            font-size: clamp(11px, 2.6vw, 15px);
             font-weight: bold;
             line-height: 1.2;
             scrollbar-width: thin;
             text-align: center;
         }
+
+        /* ---------- Control deck ---------- */
+        #control-deck {
+            grid-area: controls;
+            display: grid;
+            grid-template-columns: auto minmax(0, 1fr);
+            gap: clamp(6px, 2vw, 14px);
+            align-items: center;
+            width: 100%;
+            min-width: 0;
+            height: clamp(112px, 23dvh, 196px);
+            padding: 5px;
+            border: 1px solid var(--line);
+            border-radius: 6px;
+            background: var(--panel);
+            touch-action: none;
+        }
+        #move-pad {
+            position: relative;
+            display: grid;
+            grid-template-areas:
+                ".    up    ."
+                "left mid   right"
+                ".    down  .";
+            grid-template-columns: repeat(3, 1fr);
+            grid-template-rows: repeat(3, 1fr);
+            aspect-ratio: 1;
+            height: 100%;
+            border-radius: 50%;
+            background:
+                radial-gradient(circle at 50% 50%, rgba(239, 199, 94, 0.14) 0 42%, transparent 43%),
+                var(--panel-raised);
+            box-shadow: inset 0 0 0 2px var(--line);
+            touch-action: none;
+        }
+        .move-btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 0;
+            min-height: 0;
+            padding: 0;
+            border: 0;
+            background: transparent;
+            color: var(--accent);
+            font-family: inherit;
+            font-size: clamp(20px, 6vw, 30px);
+            line-height: 1;
+            cursor: pointer;
+            touch-action: none;
+        }
+        .move-btn:active,
+        .move-btn[data-pressed="true"] {
+            color: #fff4b8;
+            text-shadow: 0 0 10px rgba(239, 199, 94, 0.9);
+        }
+        .move-btn:focus-visible {
+            outline: 3px solid #fff4b8;
+            outline-offset: -4px;
+        }
+        [data-direction="up"] { grid-area: up; }
+        [data-direction="down"] { grid-area: down; }
+        [data-direction="left"] { grid-area: left; }
+        [data-direction="right"] { grid-area: right; }
+        #move-stick {
+            grid-area: mid;
+            place-self: center;
+            width: 76%;
+            aspect-ratio: 1;
+            border: 2px solid var(--accent);
+            border-radius: 50%;
+            background: #33372f;
+            pointer-events: none;
+            transition: transform 90ms ease-out;
+        }
+        #move-pad[data-active="true"] #move-stick {
+            background: var(--accent);
+            transition: none;
+        }
+        #action-pad {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            grid-auto-rows: minmax(0, 1fr);
+            gap: 5px;
+            min-width: 0;
+            height: 100%;
+        }
+        .action-btn {
+            display: flex;
+            flex-direction: column;
+            gap: 1px;
+            align-items: center;
+            justify-content: center;
+            min-width: 0;
+            min-height: 40px;
+            padding: 2px;
+            overflow: hidden;
+            border: 1px solid var(--line);
+            border-left: 3px solid var(--stat-accent, var(--accent));
+            border-radius: 5px;
+            background: var(--panel-raised);
+            color: var(--ink);
+            font-family: inherit;
+            font-size: clamp(10px, 2.5vw, 14px);
+            cursor: pointer;
+            touch-action: manipulation;
+        }
+        .action-btn .action-icon {
+            color: var(--stat-accent, var(--accent));
+            font-size: 1.35em;
+            line-height: 1;
+        }
+        .action-btn:active,
+        .action-btn[aria-pressed="true"] {
+            background: var(--accent);
+            color: var(--panel);
+        }
+        .action-btn[aria-pressed="true"] .action-icon {
+            color: var(--panel);
+        }
+        .action-btn:focus-visible {
+            outline: 3px solid #fff4b8;
+            outline-offset: -3px;
+        }
+
         .hidden {
             display: none !important;
         }
         #menu-toggle-btn {
             position: absolute;
-            top: 2px;
-            right: 2px;
+            top: 3px;
+            right: 3px;
             z-index: 10;
             display: flex;
             align-items: center;
@@ -158,7 +331,7 @@
             height: 44px;
             border: 1px solid var(--line);
             border-radius: 4px;
-            background: var(--panel);
+            background: var(--panel-raised);
             color: var(--ink);
             font-size: 22px;
             line-height: 1;
@@ -224,39 +397,58 @@
         #overlay-backdrop-pause {
             cursor: pointer;
         }
-        @media (max-width: 620px) {
-            .hud-stat {
-                flex-direction: column;
-                align-items: center;
-                gap: 0;
-            }
-        }
+
+        /* Wide screens get a roomy, readable sidebar next to the maze. */
         @media (min-aspect-ratio: 4 / 3) {
             main {
                 grid-template:
                     "stage hud" minmax(0, 1fr)
                     "stage message" auto
-                    / minmax(0, 1fr) clamp(176px, 24vw, 288px);
-                width: min(100%, 1280px);
+                    "stage controls" auto
+                    / minmax(0, 1fr) clamp(220px, 27vw, 360px);
+                width: min(100%, 1400px);
             }
             #hud {
+                max-height: none;
+                gap: 5px;
+                padding: 52px 6px 5px;
+            }
+            .hud-row-primary {
                 grid-template-columns: minmax(0, 1fr);
-                grid-auto-rows: min-content;
-                align-content: start;
-                gap: 1px;
-                padding: 50px 6px 4px;
-                overflow: auto;
-                font-size: clamp(10px, 1.6vw, 14px);
-                scrollbar-width: thin;
+                font-size: clamp(14px, 1.55vw, 21px);
+            }
+            .hud-row-secondary {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+                font-size: clamp(11px, 1.1vw, 15px);
             }
             .hud-stat {
-                flex-direction: row;
-                justify-content: space-between;
-                gap: 8px;
+                padding: 3px 7px;
             }
             #message {
-                max-height: 35dvh;
+                max-height: 24dvh;
                 padding-inline: 5px;
+                font-size: clamp(12px, 1.15vw, 16px);
+            }
+            #control-deck {
+                grid-template-columns: minmax(0, 1fr);
+                grid-template-rows: auto auto;
+                justify-items: center;
+                height: auto;
+                min-height: 0;
+            }
+            #move-pad {
+                height: clamp(72px, 15dvh, 116px);
+            }
+            #action-pad {
+                width: 100%;
+                height: auto;
+                grid-auto-rows: minmax(38px, auto);
+            }
+            .move-btn {
+                font-size: clamp(18px, 2.2vw, 28px);
+            }
+            .action-btn {
+                font-size: clamp(11px, 1vw, 14px);
             }
         }
     </style>
@@ -292,16 +484,60 @@
     <div id="game-wrapper">
         <main class="hidden" id="game-main">
             <div id="hud" aria-label="Player status">
-                <span class="hud-stat"><span class="stat-label">Level</span> <span class="stat-value" id="level">1</span></span>
-                <span class="hud-stat"><span class="stat-label">Health</span> <span class="stat-value" id="health">10 / 10</span></span>
-                <span class="hud-stat"><span class="stat-label">Objective</span> <span class="stat-value" id="objective">Pipe</span></span>
-                <span class="hud-stat"><span class="stat-label">Exit</span> <span class="stat-value" id="exit-status">Locked 0 / 4</span></span>
-                <span class="hud-stat"><span class="stat-label">Money</span> <span class="stat-value" id="money">$40</span></span>
-                <span class="hud-stat"><span class="stat-label">Weapon</span> <span class="stat-value" id="weapon">Improvised 1</span></span>
-                <span class="hud-stat"><span class="stat-label">Mining</span> <span class="stat-value" id="mining">0 (0)</span></span>
-                <span class="hud-stat"><span class="stat-label">Pack</span> <span class="stat-value" id="backpack">1 / 8</span></span>
-                <span class="hud-stat"><span class="stat-label">Next foe</span> <span class="stat-value" id="reinforcement">30–60s</span></span>
-                <span class="hud-stat"><span class="stat-label">Status</span> <span class="stat-value" id="player-status">Clear</span></span>
+                <div class="hud-row hud-row-primary">
+                    <span class="hud-stat" data-stat="health">
+                        <span class="stat-icon" aria-hidden="true">&#9829;</span>
+                        <span class="stat-label">Health</span>
+                        <span class="stat-value" id="health">10 / 10</span>
+                    </span>
+                    <span class="hud-stat" data-stat="objective">
+                        <span class="stat-icon" aria-hidden="true">&#9670;</span>
+                        <span class="stat-label">Objective</span>
+                        <span class="stat-value" id="objective">Pipe</span>
+                    </span>
+                    <span class="hud-stat" data-stat="exit">
+                        <span class="stat-icon" aria-hidden="true">&#9873;</span>
+                        <span class="stat-label">Exit</span>
+                        <span class="stat-value" id="exit-status">Locked 0 / 4</span>
+                    </span>
+                    <span class="hud-stat" data-stat="money">
+                        <span class="stat-icon" aria-hidden="true">&#164;</span>
+                        <span class="stat-label">Money</span>
+                        <span class="stat-value" id="money">$40</span>
+                    </span>
+                </div>
+                <div class="hud-row hud-row-secondary">
+                    <span class="hud-stat" data-stat="level">
+                        <span class="stat-icon" aria-hidden="true">&#9635;</span>
+                        <span class="stat-label">Level</span>
+                        <span class="stat-value" id="level">1</span>
+                    </span>
+                    <span class="hud-stat" data-stat="weapon">
+                        <span class="stat-icon" aria-hidden="true">&#9876;</span>
+                        <span class="stat-label">Weapon</span>
+                        <span class="stat-value" id="weapon">Improvised 1</span>
+                    </span>
+                    <span class="hud-stat" data-stat="mining">
+                        <span class="stat-icon" aria-hidden="true">&#9874;</span>
+                        <span class="stat-label">Mining</span>
+                        <span class="stat-value" id="mining">0 (0)</span>
+                    </span>
+                    <span class="hud-stat" data-stat="pack">
+                        <span class="stat-icon" aria-hidden="true">&#9636;</span>
+                        <span class="stat-label">Pack</span>
+                        <span class="stat-value" id="backpack">1 / 8</span>
+                    </span>
+                    <span class="hud-stat" data-stat="reinforcement">
+                        <span class="stat-icon" aria-hidden="true">&#9760;</span>
+                        <span class="stat-label">Next foe</span>
+                        <span class="stat-value" id="reinforcement">30&#8211;60s</span>
+                    </span>
+                    <span class="hud-stat" data-stat="status">
+                        <span class="stat-icon" aria-hidden="true">&#10022;</span>
+                        <span class="stat-label">Status</span>
+                        <span class="stat-value" id="player-status">Clear</span>
+                    </span>
+                </div>
                 <button
                     id="menu-toggle-btn"
                     class="hidden"
@@ -309,7 +545,7 @@
                     aria-label="Open menu"
                     aria-controls="pause-panel"
                     aria-expanded="false"
-                >☰</button>
+                >&#9776;</button>
             </div>
             <div id="canvas-stage">
                 <canvas
@@ -318,6 +554,78 @@
                 ></canvas>
             </div>
             <p id="message" role="status" aria-live="polite" aria-atomic="true"></p>
+            <div id="control-deck" class="hidden">
+                <div
+                    id="move-pad"
+                    role="group"
+                    aria-label="Movement pad. Tap an arrow or drag the stick."
+                >
+                    <button
+                        class="move-btn"
+                        type="button"
+                        data-direction="up"
+                        aria-label="Move up"
+                    >&#8593;</button>
+                    <button
+                        class="move-btn"
+                        type="button"
+                        data-direction="left"
+                        aria-label="Move left"
+                    >&#8592;</button>
+                    <div id="move-stick" aria-hidden="true"></div>
+                    <button
+                        class="move-btn"
+                        type="button"
+                        data-direction="right"
+                        aria-label="Move right"
+                    >&#8594;</button>
+                    <button
+                        class="move-btn"
+                        type="button"
+                        data-direction="down"
+                        aria-label="Move down"
+                    >&#8595;</button>
+                </div>
+                <div id="action-pad" role="group" aria-label="Actions">
+                    <button
+                        class="action-btn"
+                        type="button"
+                        id="control-attack"
+                        data-stat="weapon"
+                        aria-pressed="false"
+                    ><span class="action-icon" aria-hidden="true">&#9876;</span>Attack</button>
+                    <button
+                        class="action-btn"
+                        type="button"
+                        id="control-use"
+                        data-stat="health"
+                    ><span class="action-icon" aria-hidden="true">&#10010;</span>Use</button>
+                    <button
+                        class="action-btn"
+                        type="button"
+                        id="control-interact"
+                        data-stat="objective"
+                    ><span class="action-icon" aria-hidden="true">&#9678;</span>Interact</button>
+                    <button
+                        class="action-btn"
+                        type="button"
+                        id="control-wait"
+                        data-stat="status"
+                    ><span class="action-icon" aria-hidden="true">&#9202;</span>Wait</button>
+                    <button
+                        class="action-btn"
+                        type="button"
+                        id="control-inventory"
+                        data-stat="pack"
+                    ><span class="action-icon" aria-hidden="true">&#9636;</span>Items</button>
+                    <button
+                        class="action-btn"
+                        type="button"
+                        id="control-menu"
+                        data-stat="level"
+                    ><span class="action-icon" aria-hidden="true">&#9776;</span>Menu</button>
+                </div>
+            </div>
         </main>
     </div>
 

@@ -20,9 +20,13 @@ export const ZAPPER_DEFAULT_QUOTA = 12;
 export const ZAPPER_DEFAULT_STARTING_LIVES = 3;
 export const ZAPPER_BASE_FILL_DURATION_MS = 920;
 export const ZAPPER_BASE_CATCH_TOLERANCE_PX = 72;
+/** How long a serviced lane keeps its recovery slowdown. */
+export const ZAPPER_LANE_RELIEF_MS = 2_500;
+/** Approach speed multiplier applied inside a lane's recovery window. */
+export const ZAPPER_LANE_RELIEF_SPEED_MULTIPLIER = 0.55;
 
-const MIN_GLOBAL_SPAWN_GAP_MS = 1_400;
-const MIN_SAME_LANE_SPAWN_GAP_MS = 2_700;
+const MIN_GLOBAL_SPAWN_GAP_MS = 2_100;
+const MIN_SAME_LANE_SPAWN_GAP_MS = 3_400;
 const MIN_APPROACH_BUDGET_MS = 12_000;
 const MAX_DIFFICULTY = 5;
 
@@ -113,7 +117,6 @@ export interface ZapperCourse {
 export interface ZapperPlayerState {
     readonly laneIndex: number;
     readonly fillProgress: number;
-    readonly heldCompletedOrderId: string | null;
 }
 
 export interface ZapperAlienState {
@@ -146,6 +149,11 @@ export interface ZapperState {
     readonly nextOrderIndex: number;
     readonly nextProjectileId: number;
     readonly currentWaveIndex: number;
+    /**
+     * Remaining recovery slowdown per lane. A lane earns it by being serviced,
+     * so a player who keeps up can claw back a crowded counter.
+     */
+    readonly laneReliefRemainingMs: readonly number[];
     readonly activeTicks: number;
     readonly accumulatorMs: number;
     readonly status: ZapperStatus;
@@ -160,7 +168,8 @@ export interface ZapperState {
  * `laneDelta` and `actionPressed` are edge-triggered. `chargeHeld` is a level
  * input. A scene can map these equally well from a keyboard, gamepad, or touch.
  *
- * The action launches a full blaster, or hands off a caught completed blaster.
+ * The action launches a full blaster. Catching a completed blaster in the
+ * matching lane finishes the order on its own.
  */
 export interface ZapperInput {
     readonly laneDelta: -1 | 0 | 1;
@@ -174,10 +183,7 @@ export const ZAPPER_IDLE_INPUT: ZapperInput = Object.freeze({
     actionPressed: false
 });
 
-export type ZapperActionRejection =
-    | 'blaster-not-full'
-    | 'handoff-wrong-lane'
-    | 'handoff-customer-missing';
+export type ZapperActionRejection = 'blaster-not-full';
 
 export type ZapperEvent =
     | {readonly kind: 'wave-started'; readonly waveIndex: number}
@@ -207,6 +213,7 @@ export type ZapperEvent =
     | {
         readonly kind: 'handoff-complete';
         readonly orderId: string;
+        readonly laneIndex: number;
         readonly completedOrders: number;
         readonly quota: number;
     }
@@ -240,7 +247,6 @@ export interface ZapperTelemetry {
     readonly score: number;
     readonly fillProgress: number;
     readonly blasterReady: boolean;
-    readonly heldCompletedOrderId: string | null;
     readonly completedOrders: number;
     readonly completionQuota: number;
     readonly failedOrders: number;
@@ -249,6 +255,7 @@ export interface ZapperTelemetry {
     readonly returningBlasters: number;
     readonly currentWave: number;
     readonly scheduledOrdersRemaining: number;
+    readonly relievedLanes: readonly number[];
     readonly nearestThreatMs: number | null;
     readonly status: ZapperStatus;
     readonly failureReason: ZapperFailureReason | null;
@@ -262,6 +269,7 @@ export interface ZapperRenderSnapshot {
     readonly completedOrders: number;
     readonly completionQuota: number;
     readonly currentWave: number;
+    readonly laneReliefRemainingMs: readonly number[];
     readonly aliens: readonly (Omit<ZapperAlienState, 'previousX'> & {
         readonly x: number;
         readonly appearance: ZapperAlienAppearance;
@@ -275,7 +283,6 @@ export interface ZapperRenderSnapshot {
 interface MutablePlayerState {
     laneIndex: number;
     fillProgress: number;
-    heldCompletedOrderId: string | null;
 }
 
 interface MutableAlienState {
@@ -308,6 +315,7 @@ interface MutableZapperState {
     nextOrderIndex: number;
     nextProjectileId: number;
     currentWaveIndex: number;
+    laneReliefRemainingMs: number[];
     activeTicks: number;
     accumulatorMs: number;
     status: ZapperStatus;
@@ -470,10 +478,10 @@ export function createZapperCourse(
         for (const laneIndex of lanes) {
             if (orders.length >= orderCount) break;
             if (orders.length > 0) {
-                const baseGap = 1_900 - difficulty * 80;
+                const baseGap = 2_500 - difficulty * 70;
                 spawnAtMs += baseGap + randomInteger(random, 701);
                 if (orders.length % ZAPPER_LANE_COUNT === 0) {
-                    spawnAtMs += 900 + randomInteger(random, 601);
+                    spawnAtMs += 1_200 + randomInteger(random, 701);
                 }
                 spawnAtMs = alignToFixedStep(spawnAtMs);
             }
@@ -709,8 +717,7 @@ export function createZapperState(course: ZapperCourse): ZapperState {
         course,
         player: {
             laneIndex: 0,
-            fillProgress: 0,
-            heldCompletedOrderId: null
+            fillProgress: 0
         },
         aliens: [],
         projectiles: [],
@@ -721,6 +728,7 @@ export function createZapperState(course: ZapperCourse): ZapperState {
         nextOrderIndex: 0,
         nextProjectileId: 0,
         currentWaveIndex: -1,
+        laneReliefRemainingMs: Array.from({length: ZAPPER_LANE_COUNT}, () => 0),
         activeTicks: 0,
         accumulatorMs: 0,
         status: 'active',
@@ -745,6 +753,7 @@ function cloneState(state: ZapperState): MutableZapperState {
         nextOrderIndex: state.nextOrderIndex,
         nextProjectileId: state.nextProjectileId,
         currentWaveIndex: state.currentWaveIndex,
+        laneReliefRemainingMs: [...state.laneReliefRemainingMs],
         activeTicks: state.activeTicks,
         accumulatorMs: state.accumulatorMs,
         status: state.status,
@@ -814,13 +823,7 @@ function chargeBlaster(
     state: MutableZapperState,
     events: ZapperEvent[]
 ): void {
-    if (
-        !state.chargeHeld ||
-        state.player.heldCompletedOrderId !== null ||
-        state.player.fillProgress >= 1
-    ) {
-        return;
-    }
+    if (!state.chargeHeld || state.player.fillProgress >= 1) return;
     const previous = state.player.fillProgress;
     state.player.fillProgress = clamp(
         previous + ZAPPER_FIXED_STEP_MS / state.course.tuning.fillDurationMs,
@@ -832,28 +835,24 @@ function chargeBlaster(
     }
 }
 
-function handoffHeldBlaster(
+/**
+ * Completing an order clears its alien and buys the whole lane a short
+ * recovery window, so a fast player can catch up on a crowded counter.
+ */
+function completeOrder(
     state: MutableZapperState,
+    orderId: string,
+    laneIndex: number,
     events: ZapperEvent[]
 ): void {
-    const orderId = state.player.heldCompletedOrderId;
-    if (orderId === null) return;
-    const alien = state.aliens.find(candidate => candidate.orderId === orderId);
-    if (alien === undefined || alien.phase !== 'waiting-return') {
-        events.push({kind: 'action-rejected', reason: 'handoff-customer-missing'});
-        return;
-    }
-    if (alien.laneIndex !== state.player.laneIndex) {
-        events.push({kind: 'action-rejected', reason: 'handoff-wrong-lane'});
-        return;
-    }
-    state.player.heldCompletedOrderId = null;
     state.aliens = state.aliens.filter(candidate => candidate.orderId !== orderId);
     state.completedOrders += 1;
     state.score += 500;
+    state.laneReliefRemainingMs[laneIndex] = ZAPPER_LANE_RELIEF_MS;
     events.push({
         kind: 'handoff-complete',
         orderId,
+        laneIndex,
         completedOrders: state.completedOrders,
         quota: state.course.completionQuota
     });
@@ -893,12 +892,7 @@ function performAction(
     state: MutableZapperState,
     events: ZapperEvent[]
 ): void {
-    if (state.player.heldCompletedOrderId !== null) {
-        handoffHeldBlaster(state, events);
-    }
-    else {
-        launchOutgoing(state, events);
-    }
+    launchOutgoing(state, events);
 }
 
 function loseLife(
@@ -927,7 +921,11 @@ function advanceApproachingAliens(
         if (alien.phase !== 'approaching') continue;
         const order = orderById(state.course, alien.orderId);
         if (order === undefined) continue;
-        alien.x -= order.approachSpeed * ZAPPER_FIXED_STEP_MS / 1_000;
+        const relieved = (state.laneReliefRemainingMs[alien.laneIndex] ?? 0) > 0;
+        const speed = relieved
+            ? order.approachSpeed * ZAPPER_LANE_RELIEF_SPEED_MULTIPLIER
+            : order.approachSpeed;
+        alien.x -= speed * ZAPPER_FIXED_STEP_MS / 1_000;
         if (alien.x <= ZAPPER_DANGER_X) breachedOrderIds.push(alien.orderId);
     }
     for (const orderId of breachedOrderIds) {
@@ -935,9 +933,6 @@ function advanceApproachingAliens(
         state.projectiles = state.projectiles.filter(
             projectile => projectile.orderId !== orderId
         );
-        if (state.player.heldCompletedOrderId === orderId) {
-            state.player.heldCompletedOrderId = null;
-        }
         loseLife(state, 'alien-breached', orderId, events);
         if (state.status !== 'active') return;
     }
@@ -1043,13 +1038,13 @@ function advanceReturningProjectiles(
         const canCatch =
             projectile.x <= catchThreshold &&
             projectile.x >= ZAPPER_RETURN_MISS_X &&
-            projectile.laneIndex === state.player.laneIndex &&
-            state.player.heldCompletedOrderId === null;
+            projectile.laneIndex === state.player.laneIndex;
         if (canCatch && projectile.orderId !== null) {
-            state.player.heldCompletedOrderId = projectile.orderId;
             state.score += 100;
             removeIds.add(projectile.id);
             events.push({kind: 'return-caught', orderId: projectile.orderId});
+            completeOrder(state, projectile.orderId, projectile.laneIndex, events);
+            if (state.status !== 'active') break;
         }
         else if (projectile.x < ZAPPER_RETURN_MISS_X) {
             removeIds.add(projectile.id);
@@ -1094,6 +1089,9 @@ function simulateStep(
 ): void {
     if (state.status !== 'active' || state.paused) return;
     state.activeTicks += 1;
+    state.laneReliefRemainingMs = state.laneReliefRemainingMs.map(remaining =>
+        Math.max(0, remaining - ZAPPER_FIXED_STEP_MS)
+    );
     for (const alien of state.aliens) alien.previousX = alien.x;
     for (const projectile of state.projectiles) projectile.previousX = projectile.x;
     spawnDueAliens(state, events);
@@ -1192,20 +1190,6 @@ export function recommendZapperInput(state: ZapperState): ZapperInput {
             ? -1
             : laneIndex > state.player.laneIndex ? 1 : 0;
 
-    const heldOrderId = state.player.heldCompletedOrderId;
-    if (heldOrderId !== null) {
-        const waitingAlien = state.aliens.find(alien => alien.orderId === heldOrderId);
-        if (waitingAlien === undefined) {
-            return {...ZAPPER_IDLE_INPUT, actionPressed: true};
-        }
-        const laneDelta = moveToward(waitingAlien.laneIndex);
-        return {
-            laneDelta,
-            chargeHeld: false,
-            actionPressed: laneDelta === 0
-        };
-    }
-
     const returning = state.projectiles
         .filter(projectile => projectile.kind === 'returning')
         .sort((left, right) => left.x - right.x)[0];
@@ -1275,7 +1259,6 @@ export function getZapperTelemetry(state: ZapperState): ZapperTelemetry {
         score: state.score,
         fillProgress: state.player.fillProgress,
         blasterReady: state.player.fillProgress >= 1,
-        heldCompletedOrderId: state.player.heldCompletedOrderId,
         completedOrders: state.completedOrders,
         completionQuota: state.course.completionQuota,
         failedOrders: state.failedOrders,
@@ -1288,6 +1271,9 @@ export function getZapperTelemetry(state: ZapperState): ZapperTelemetry {
         ).length,
         currentWave: state.currentWaveIndex + 1,
         scheduledOrdersRemaining: state.course.orders.length - state.nextOrderIndex,
+        relievedLanes: state.laneReliefRemainingMs.flatMap((remaining, laneIndex) =>
+            remaining > 0 ? [laneIndex] : []
+        ),
         nearestThreatMs: nearestThreat,
         status: state.status,
         failureReason: state.failureReason
@@ -1310,6 +1296,7 @@ export function getZapperRenderSnapshot(
         completedOrders: state.completedOrders,
         completionQuota: state.course.completionQuota,
         currentWave: state.currentWaveIndex + 1,
+        laneReliefRemainingMs: state.laneReliefRemainingMs,
         aliens: state.aliens.flatMap(alien => {
             const order = orderById(state.course, alien.orderId);
             return order === undefined

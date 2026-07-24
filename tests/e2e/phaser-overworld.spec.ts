@@ -588,6 +588,10 @@ async function dragGamePoint(
     }
 }
 
+async function pressInteract(page: Page): Promise<void> {
+    await page.locator('#control-interact').click();
+}
+
 async function tapCircuitCell(page: Page, index: number): Promise<void> {
     const canvas = page.locator('canvas[data-runtime="phaser"]');
     const originX = Number(await canvas.getAttribute('data-circuit-board-origin-x'));
@@ -724,7 +728,11 @@ test('keeps the HUD, maze, controls, and messages playable across viewports', as
         '#menu-toggle-btn',
         '#canvas-stage',
         'canvas[data-runtime="phaser"]',
-        '#message'
+        '#message',
+        '#control-deck',
+        '#move-pad',
+        '#control-attack',
+        '#control-inventory'
     ];
 
     for (const viewport of viewports) {
@@ -828,48 +836,109 @@ test('shows large mobile controls without page scrolling', async ({page}, testIn
         document.documentElement.scrollHeight <= window.innerHeight + 1
     )).toBe(true);
 
+    const pad = await page.locator('#move-pad').boundingBox();
+    expect(pad).not.toBeNull();
+    if (!pad) throw new Error('Expected a visible movement pad.');
+    expect(pad.width).toBeGreaterThanOrEqual(96);
+    expect(pad.height).toBeGreaterThanOrEqual(96);
+    for (const selector of ['#control-attack', '#control-use', '#control-inventory']) {
+        const button = await page.locator(selector).boundingBox();
+        expect(button, `${selector} is visible`).not.toBeNull();
+        expect(button!.height, `${selector} touch height`).toBeGreaterThanOrEqual(40);
+    }
+
     const before = await readSavedState(page);
     const start = before.overworld.playerPosition;
-    const directions = [
-        {position: {x: start.x, y: start.y - 1}, point: {x: 80, y: 518}},
-        {position: {x: start.x - 1, y: start.y}, point: {x: 28, y: 570}},
-        {position: {x: start.x, y: start.y + 1}, point: {x: 80, y: 570}},
-        {position: {x: start.x + 1, y: start.y}, point: {x: 132, y: 570}}
-    ];
-    const usable = directions.find(candidate =>
-        before.overworld.maze[candidate.position.y]?.[candidate.position.x]?.kind === 'passage'
-    );
+    const usable = (['up', 'left', 'down', 'right'] as const)
+        .map(direction => ({
+            direction,
+            position: {
+                x: start.x + (direction === 'left' ? -1 : direction === 'right' ? 1 : 0),
+                y: start.y + (direction === 'up' ? -1 : direction === 'down' ? 1 : 0)
+            }
+        }))
+        .find(candidate =>
+            before.overworld.maze[candidate.position.y]?.[candidate.position.x]?.kind === 'passage'
+        );
     if (!usable) throw new Error('Spawn has no touch-reachable passage.');
-    await tapGamePoint(page, usable.point.x, usable.point.y);
+    await page.locator(`.move-btn[data-direction="${usable.direction}"]`).click();
     await expect(page.locator('#game-main')).toHaveAttribute('data-turn', '1');
+    await expect.poll(async () => (await readSavedState(page)).overworld.playerPosition)
+        .toEqual(usable.position);
 });
 
-test('overworld touch action bar opens inventory, attacks, and waits', async ({page}) => {
+test('the movement pad also steers as a drag joystick', async ({page}) => {
+    await startPhaser(page);
+    const before = await readSavedState(page);
+    const start = before.overworld.playerPosition;
+    const usable = (['up', 'left', 'down', 'right'] as const)
+        .map(direction => ({
+            direction,
+            offset: {
+                x: direction === 'left' ? -1 : direction === 'right' ? 1 : 0,
+                y: direction === 'up' ? -1 : direction === 'down' ? 1 : 0
+            }
+        }))
+        .find(candidate =>
+            before.overworld.maze[start.y + candidate.offset.y]
+                ?.[start.x + candidate.offset.x]?.kind === 'passage'
+        );
+    if (!usable) throw new Error('Spawn has no reachable passage.');
+
+    const pad = await page.locator('#move-pad').boundingBox();
+    if (!pad) throw new Error('Expected a visible movement pad.');
+    const centre = {x: pad.x + pad.width / 2, y: pad.y + pad.height / 2};
+    const reach = Math.min(pad.width, pad.height) * 0.4;
+    await page.mouse.move(centre.x, centre.y);
+    await page.mouse.down();
+    await page.mouse.move(
+        centre.x + usable.offset.x * reach,
+        centre.y + usable.offset.y * reach,
+        {steps: 4}
+    );
+    await expect(page.locator('#game-main')).toHaveAttribute('data-turn', /^[1-9]/);
+    await page.mouse.up();
+
+    const after = await readSavedState(page);
+    expect(after.overworld.playerPosition).toEqual({
+        x: start.x + usable.offset.x,
+        y: start.y + usable.offset.y
+    });
+});
+
+test('overworld action deck opens inventory, attacks, and waits', async ({page}) => {
     await startPhaser(page);
     const gameMain = page.locator('#game-main');
     const canvas = page.locator('canvas[data-runtime="phaser"]');
+    const attack = page.locator('#control-attack');
     const startingTurn = Number(await gameMain.getAttribute('data-turn'));
 
-    await tapGamePoint(page, 612, 630);
+    await page.locator('#control-inventory').click();
     await expect(canvas).toHaveAttribute('data-overworld-modal-open', 'true');
     await tapGamePoint(page, 336, 521);
     await expect(canvas).not.toHaveAttribute('data-overworld-modal-open');
 
-    await tapGamePoint(page, 612, 522);
+    await attack.click();
     await expect(page.locator('#message')).toHaveText('Choose an attack direction.');
-    await tapGamePoint(page, 612, 522);
+    await expect(attack).toHaveAttribute('aria-pressed', 'true');
+    await attack.click();
     await expect(page.locator('#message')).toHaveText('Attack cancelled.');
+    await expect(attack).toHaveAttribute('aria-pressed', 'false');
 
-    await tapGamePoint(page, 498, 522);
+    await page.locator('#control-wait').click();
     await expect(gameMain).toHaveAttribute('data-turn', String(startingTurn + 1));
 });
 
-test('keeps the maze player centered clear of the corner controls', async ({page}) => {
+test('keeps the maze player centered while the camera stays readable', async ({page}) => {
     await startPhaser(page);
     const canvas = page.locator('canvas[data-runtime="phaser"]');
     await expect(canvas).toHaveAttribute('data-overworld-camera-mode', 'player-centered');
-    await expect(canvas).toHaveAttribute('data-overworld-camera-padding-x', '288');
-    await expect(canvas).toHaveAttribute('data-overworld-camera-padding-y', '288');
+    const zoom = Number(await canvas.getAttribute('data-overworld-camera-zoom'));
+    expect(zoom).toBeGreaterThanOrEqual(1);
+    expect(zoom).toBeLessThanOrEqual(2);
+    const expectedPadding = String(Math.max(0, 336 / zoom - 48));
+    await expect(canvas).toHaveAttribute('data-overworld-camera-padding-x', expectedPadding);
+    await expect(canvas).toHaveAttribute('data-overworld-camera-padding-y', expectedPadding);
     await expect(canvas).toHaveAttribute('data-overworld-player-screen-x', '336.0');
     await expect(canvas).toHaveAttribute('data-overworld-player-screen-y', '336.0');
 
@@ -896,7 +965,7 @@ test('Blackjack supports wagering, player choices, repeat hands, and wallet save
     await startPhaser(page);
     const gameMain = page.locator('#game-main');
     const canvas = page.locator('canvas[data-runtime="phaser"]');
-    await tapGamePoint(page, 498, 576);
+    await pressInteract(page);
     await expect(gameMain).toHaveAttribute('data-encounter', 'blackjack');
     await expect(canvas).toHaveAttribute('data-casino-game', 'blackjack');
     await expect(canvas).toHaveAttribute('data-casino-phase', 'betting');
@@ -923,7 +992,7 @@ test('Texas Hold’em deals four streets against the computer and allows repeat 
     await startPhaser(page);
     const gameMain = page.locator('#game-main');
     const canvas = page.locator('canvas[data-runtime="phaser"]');
-    await tapGamePoint(page, 498, 576);
+    await pressInteract(page);
     await expect(gameMain).toHaveAttribute('data-encounter', 'holdem');
     await expect(canvas).toHaveAttribute('data-casino-game', 'holdem');
     await tapGamePoint(page, 336, 548);
@@ -960,7 +1029,7 @@ test('optional shops spend persistent money on useful equipment and upgrades', a
     const gameMain = page.locator('#game-main');
     const canvas = page.locator('canvas[data-runtime="phaser"]');
     await expect(gameMain).toHaveAttribute('data-money', '40');
-    await tapGamePoint(page, 498, 576);
+    await pressInteract(page);
     await expect(canvas).toHaveAttribute('data-shop-open', 'true');
     await tapGamePoint(page, 336, 166);
     await expect(gameMain).toHaveAttribute('data-money', '30');
@@ -978,7 +1047,7 @@ test('shop touch paging can buy the car and shows its durable owned state', asyn
     await installSave(page, createCarShopSave());
     await startPhaser(page);
     const canvas = page.locator('canvas[data-runtime="phaser"]');
-    await tapGamePoint(page, 498, 576);
+    await pressInteract(page);
     await expect(canvas).toHaveAttribute('data-shop-page', '0');
     await tapGamePoint(page, 521, 606);
     await expect(canvas).toHaveAttribute('data-shop-page', '1');
@@ -1017,13 +1086,13 @@ test('pays $100 to skip Space and clicks the deliberate success result card', as
     await startPhaser(page);
     const gameMain = page.locator('#game-main');
     const canvas = page.locator('canvas[data-runtime="phaser"]');
-    await tapGamePoint(page, 498, 576);
+    await pressInteract(page);
     await expect(canvas).toHaveAttribute('data-space-options-open', 'true');
     await expect(canvas).toHaveAttribute('data-space-skip-affordable', 'true');
 
     await tapGamePoint(page, 336, 479);
     await expect(canvas).not.toHaveAttribute('data-space-options-open');
-    await tapGamePoint(page, 498, 576);
+    await pressInteract(page);
     await expect(canvas).toHaveAttribute('data-space-options-open', 'true');
     await tapGamePoint(page, 336, 422);
     await expect(canvas).toHaveAttribute('data-encounter-overlay', 'success');
@@ -1045,7 +1114,7 @@ test('Space menu launches the mission from its touch button', async ({page}) => 
     await startPhaser(page);
     const gameMain = page.locator('#game-main');
     const canvas = page.locator('canvas[data-runtime="phaser"]');
-    await tapGamePoint(page, 498, 576);
+    await pressInteract(page);
     await expect(canvas).toHaveAttribute('data-space-options-open', 'true');
     await tapGamePoint(page, 336, 361);
     await expect(gameMain).toHaveAttribute('data-encounter', 'shooter');

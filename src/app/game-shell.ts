@@ -36,6 +36,7 @@ export interface GameShell {
     readonly playerStatus: HTMLElement;
     readonly exitStatus: HTMLElement;
     readonly message: HTMLElement;
+    readonly controlDeck: HTMLElement;
 }
 
 export function getGameShell(): GameShell {
@@ -60,7 +61,8 @@ export function getGameShell(): GameShell {
         objective: requireElement<HTMLElement>('#objective'),
         playerStatus: requireElement<HTMLElement>('#player-status'),
         exitStatus: requireElement<HTMLElement>('#exit-status'),
-        message: requireElement<HTMLElement>('#message')
+        message: requireElement<HTMLElement>('#message'),
+        controlDeck: requireElement<HTMLElement>('#control-deck')
     };
 }
 
@@ -69,12 +71,13 @@ export function enterPhaserGame(shell: GameShell): HTMLCanvasElement {
     shell.startBackdrop.classList.add('hidden');
     shell.gameMain.classList.remove('hidden');
     shell.menuButton.classList.remove('hidden');
+    shell.controlDeck.classList.remove('hidden');
 
     const canvas = shell.canvas;
     canvas.dataset.runtime = 'phaser';
     canvas.setAttribute(
         'aria-label',
-        'Phaser maze prototype. Use arrow keys, WASD, or the on-screen controls to move.'
+        'Phaser maze prototype. Use arrow keys, WASD, or the on-screen control deck to move.'
     );
     return canvas;
 }
@@ -198,6 +201,9 @@ export function updatePhaserHud(
 
 export function updatePhaserEncounter(shell: GameShell, kind: GameActivityKind | null): void {
     const canvas = shell.gameMain.querySelector<HTMLCanvasElement>('canvas');
+    // Minigames carry their own in-canvas controls, so the maze deck steps
+    // aside instead of sending stray overworld actions.
+    shell.controlDeck.classList.toggle('hidden', kind !== null);
     if (kind) {
         shell.gameMain.dataset.encounter = kind;
         const label: Record<GameActivityKind, string> = {
@@ -217,7 +223,7 @@ export function updatePhaserEncounter(shell: GameShell, kind: GameActivityKind |
         delete shell.gameMain.dataset.encounter;
         canvas?.setAttribute(
             'aria-label',
-            'Maze overworld. Use arrow keys, WASD, or the on-screen controls to move.'
+            'Maze overworld. Use arrow keys, WASD, or the on-screen control deck to move.'
         );
     }
 }
