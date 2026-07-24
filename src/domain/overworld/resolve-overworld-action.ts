@@ -1786,7 +1786,7 @@ function tickStatuses(
     const statuses: PlayerStatus[] = [];
     for (const status of state.player.statuses) {
         if (status.kind === 'poison') poisonDamage++;
-        const remainingTurns = status.remainingTurns - 1;
+        const remainingTurns = Math.max(0, status.remainingTurns - 1);
         if (remainingTurns > 0 || status.charges > 0) statuses.push({...status, remainingTurns});
     }
     return {

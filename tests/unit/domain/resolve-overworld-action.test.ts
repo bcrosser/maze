@@ -22,6 +22,7 @@ import {
 } from '../../../src/domain/overworld/level-objectives';
 import {resolveOverworldAction} from '../../../src/domain/overworld/resolve-overworld-action';
 import {Mulberry32Random} from '../../../src/domain/random/random-source';
+import {campaignStateSchema} from '../../../src/save/campaign-state.schema';
 
 function campaign(seed = 22, levelId = 'level-1') {
     const maze = generateMaze({
@@ -396,6 +397,56 @@ describe('resolveOverworldAction', () => {
         }
         expect(state.overworld.monsters[0]?.health).toBe(2);
         expect(state.overworld.monsters[0]?.undamagedTurns).toBe(0);
+    });
+
+    it('keeps an unspent charged status valid while a Sentry Eye takes turns', () => {
+        const base = campaign();
+        const sentryEye = {
+            ...base.overworld.monsters[0]!,
+            id: 'status-regression-sentry-eye',
+            typeId: 'floating-eye' as const,
+            variantIds: [],
+            position: {x: 1, y: 3},
+            spawnPosition: {x: 1, y: 3},
+            nextMoveTurn: Number.MAX_SAFE_INTEGER,
+            nextAttackTurn: 999,
+            intent: {
+                kind: 'ranged' as const,
+                targetPositions: [base.overworld.playerPosition],
+                damage: 2,
+                executeOnTurn: 1
+            }
+        };
+        let state: CampaignState = {
+            ...base,
+            player: {
+                ...base.player,
+                statuses: [{kind: 'fire-ward', remainingTurns: 1, charges: 1}]
+            },
+            overworld: {
+                ...base.overworld,
+                items: [],
+                traps: [],
+                monsters: [sentryEye]
+            }
+        };
+
+        state = resolveOverworldAction(state, {kind: 'wait'}).state;
+        const open = openDirection(state);
+        const moved = resolveOverworldAction(state, {
+            kind: 'move',
+            direction: open.direction
+        });
+        state = moved.state;
+
+        expect(moved.consumedTurn).toBe(true);
+        expect(state.overworld.playerPosition).toEqual(open.position);
+        expect(state.player.statuses).toContainEqual({
+            kind: 'fire-ward',
+            remainingTurns: 0,
+            charges: 1
+        });
+        expect(() => campaignStateSchema.parse(state)).not.toThrow();
     });
 
     it('applies Guard and Shield to each ordered incoming hit', () => {

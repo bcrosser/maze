@@ -10,6 +10,7 @@ import {CAMPAIGN_VICTORY_FLAG} from '../../src/domain/campaign/level-progression
 import {initializeLevelContent} from '../../src/domain/overworld/level-content-generator';
 import {
     CASINO_HEIST_UNLOCK_FLAG,
+    getCurrentObjective,
     getObjectiveStatus,
     OBJECTIVE_BY_ID,
     type ObjectiveId
@@ -342,6 +343,48 @@ function directionKey(from: Coordinate, to: Coordinate): string {
     throw new Error('Expected adjacent coordinates.');
 }
 
+function createChargedWardExpirySave(): {
+    readonly serialized: string;
+    readonly outwardMoveKey: string;
+    readonly returnMoveKey: string;
+    readonly start: Coordinate;
+    readonly destination: Coordinate;
+} {
+    const state = createGeneratedCampaign();
+    const start = state.overworld.playerPosition;
+    const destination = [
+        {x: start.x, y: start.y + 1},
+        {x: start.x + 1, y: start.y},
+        {x: start.x, y: start.y - 1},
+        {x: start.x - 1, y: start.y}
+    ].find(position => state.overworld.maze[position.y]?.[position.x]?.kind === 'passage');
+    if (!destination) throw new Error('Spawn has no passage neighbor.');
+    return {
+        serialized: serialize({
+            ...state,
+            player: {
+                ...state.player,
+                statuses: [{
+                    kind: 'fire-ward',
+                    remainingTurns: 1,
+                    charges: 2
+                }]
+            },
+            overworld: {
+                ...state.overworld,
+                items: [],
+                monsters: [],
+                traps: [],
+                pendingHazards: []
+            }
+        }),
+        outwardMoveKey: directionKey(start, destination),
+        returnMoveKey: directionKey(destination, start),
+        start,
+        destination
+    };
+}
+
 function createExitSave(): {readonly serialized: string; readonly moveKey: string} {
     const flags = Object.values(COMPLETION_FLAGS);
     const state = withFlags(createGeneratedCampaign(), flags);
@@ -588,11 +631,9 @@ test('generates, autosaves, resumes, and renders a distributed roguelike maze', 
     await expect(page.locator('#money')).toHaveText('$40');
     await expect(page.locator('canvas[data-runtime="phaser"]'))
         .toHaveAttribute('data-service-sites', /blackjack@.*holdem@/);
-    const firstObjective = beforeMove.overworld.objectives[0];
-    if (!firstObjective) throw new Error('Expected selected objectives.');
-    await expect(page.locator('#objective')).toHaveText(
-        OBJECTIVE_BY_ID[firstObjective.objectiveId].label
-    );
+    const currentObjective = getCurrentObjective(beforeMove);
+    if (!currentObjective) throw new Error('Expected a current objective.');
+    await expect(page.locator('#objective')).toHaveText(currentObjective.label);
     await expect(page.locator('#exit-status')).toHaveText('Locked 0 / 1');
 
     const start = beforeMove.overworld.playerPosition;
@@ -621,6 +662,40 @@ test('generates, autosaves, resumes, and renders a distributed roguelike maze', 
     await page.getByRole('button', {name: 'Start Game'}).click();
     await expect(gameMain).toHaveAttribute('data-player-x', String(destination.x));
     await expect(gameMain).toHaveAttribute('data-player-y', String(destination.y));
+});
+
+test('keeps movement and autosave valid when a charged Ward timer reaches zero', async ({
+    page
+}) => {
+    const runtimeErrors: string[] = [];
+    page.on('pageerror', error => runtimeErrors.push(error.message));
+    const save = createChargedWardExpirySave();
+    await installSave(page, save.serialized);
+    await startPhaser(page);
+    const gameMain = page.locator('#game-main');
+
+    await page.keyboard.press(save.outwardMoveKey);
+    await expect(gameMain).toHaveAttribute('data-turn', '1');
+    await expect.poll(async () => (await readSavedState(page)).overworld.turn).toBe(1);
+    const atZero = await readSavedState(page);
+    expect(atZero.overworld.playerPosition).toEqual(save.destination);
+    expect(atZero.player.statuses).toContainEqual({
+        kind: 'fire-ward',
+        remainingTurns: 0,
+        charges: 2
+    });
+
+    await page.keyboard.press(save.returnMoveKey);
+    await expect(gameMain).toHaveAttribute('data-turn', '2');
+    await expect.poll(async () => (await readSavedState(page)).overworld.turn).toBe(2);
+    const continued = await readSavedState(page);
+    expect(continued.overworld.playerPosition).toEqual(save.start);
+    expect(continued.player.statuses).toContainEqual({
+        kind: 'fire-ward',
+        remainingTurns: 0,
+        charges: 2
+    });
+    expect(runtimeErrors).toEqual([]);
 });
 
 test('keeps the HUD, maze, controls, and messages playable across viewports', async ({
