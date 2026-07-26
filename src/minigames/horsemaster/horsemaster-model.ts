@@ -21,7 +21,7 @@ export const HORSEMASTER_TRAFFIC_MIN_X = -96;
 export const HORSEMASTER_TRAFFIC_MAX_X = HORSEMASTER_WORLD_WIDTH + 96;
 export const HORSEMASTER_HORSE_HALF_WIDTH = 13;
 export const HORSEMASTER_SLOT_WIDTH = 48;
-export const HORSEMASTER_LANDING_TOLERANCE = 24;
+export const HORSEMASTER_LANDING_TOLERANCE = 12;
 export const HORSEMASTER_DOOR_HALF_WIDTH = 24;
 export const HORSEMASTER_EDGE_DEATH_MARGIN = 12;
 export const HORSEMASTER_BIKE_HIT_TOLERANCE = 26;
@@ -1002,7 +1002,7 @@ function checkCarriedOffEdge(
     if (player.ride === null || player.jump !== null) return false;
     if (
         player.x < -HORSEMASTER_EDGE_DEATH_MARGIN ||
-        player.x > state.course.width + HORSEMASTER_EDGE_DEATH_MARGIN
+        player.x > state.course.width - HORSEMASTER_EDGE_DEATH_MARGIN
     ) {
         loseHeart(state, events, 'carried-off-edge');
         return true;
@@ -1067,7 +1067,7 @@ function applyHorizontalInput(
     events: HorsemasterEvent[]
 ): void {
     const player = state.player;
-    if (player.jump !== null || player.recoveryMs > 0) return;
+    if (player.jump !== null) return;
     if (player.ride !== null) {
         const definition = vehicleDefinitionsById(state.course).get(player.ride.vehicleId);
         const vehicle = state.vehicles.find(
@@ -1260,22 +1260,21 @@ export function advanceHorsemaster(
     if (input.horizontal !== 0) next.pendingHorizontal = input.horizontal;
     if (input.vertical !== 0) next.pendingVertical = input.vertical;
     const events: HorsemasterEvent[] = [];
-    let firstStep = true;
     while (
         next.accumulatorMs + 1e-9 >= HORSEMASTER_FIXED_STEP_MS &&
         next.status === 'active'
     ) {
+        const consumable = next.player.jump === null;
         simulateStep(next, {
-            horizontal: firstStep ? next.pendingHorizontal : 0,
-            vertical: firstStep ? next.pendingVertical : 0
+            horizontal: next.pendingHorizontal,
+            vertical: next.pendingVertical
         }, events);
-        if (firstStep) {
+        if (consumable) {
             next.pendingHorizontal = 0;
             next.pendingVertical = 0;
         }
         next.accumulatorMs -= HORSEMASTER_FIXED_STEP_MS;
         if (Math.abs(next.accumulatorMs) < 1e-9) next.accumulatorMs = 0;
-        firstStep = false;
     }
     return {state: next, events};
 }
