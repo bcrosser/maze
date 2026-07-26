@@ -6,10 +6,12 @@ import {installOverworldControlDeck} from './overworld-control-deck';
 import type {CampaignState} from '../domain/campaign/campaign-state';
 import {BlackjackScene} from '../minigames/casino/blackjack.scene';
 import {HoldemScene} from '../minigames/casino/holdem.scene';
-import {CircuitCrushScene} from '../minigames/circuit/circuit.scene';
+import {CircuitCrashScene} from '../minigames/circuit/circuit.scene';
 import {HorsemasterScene} from '../minigames/horsemaster/horsemaster.scene';
 import {CasinoHeistScene} from '../minigames/heist/casino-heist.scene';
 import {LockpickScene} from '../minigames/lock/lockpick.scene';
+import {SafeDialScene} from '../minigames/lock/safe-dial.scene';
+import {TumblerRelayScene} from '../minigames/lock/tumbler-relay.scene';
 import {PlatformerScene} from '../minigames/platformer/platformer.scene';
 import {PipeDreamScene} from '../minigames/pipe/pipe-dream.scene';
 import {ShooterScene} from '../minigames/shooter/shooter.scene';
@@ -70,7 +72,9 @@ export function createMazeGame(
             scene,
             new PipeDreamScene(),
             new LockpickScene(),
-            new CircuitCrushScene(),
+            new SafeDialScene(),
+            new TumblerRelayScene(),
+            new CircuitCrashScene(),
             new BlackjackScene(),
             new HoldemScene(),
             new ShooterScene({

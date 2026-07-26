@@ -20,16 +20,17 @@ import {
     getCircuitLegalSwaps,
     getCircuitProgress,
     validateCircuitWitness,
+    type CircuitChip,
     type CircuitColor,
     type CircuitPuzzleState,
     type CircuitSpecial
 } from './circuit-model';
 
-export const CIRCUIT_CRUSH_SCENE_KEY = 'circuit-crush';
+export const CIRCUIT_CRASH_SCENE_KEY = 'circuit-crash';
 export const CIRCUIT_BOARD_ORIGIN = Object.freeze({x: 18, y: 124});
 export const CIRCUIT_TILE_SIZE = 57;
 
-export interface CircuitCrushLaunchData {
+export interface CircuitCrashLaunchData {
     readonly context: EncounterContext;
     readonly onComplete: (result: EncounterResult) => void;
 }
@@ -38,6 +39,12 @@ const VIEW_SIZE = 672;
 const BOARD_SIZE = CIRCUIT_TILE_SIZE * 8;
 const PANEL_X = CIRCUIT_BOARD_ORIGIN.x + BOARD_SIZE + 13;
 const PANEL_WIDTH = VIEW_SIZE - PANEL_X - 14;
+
+const SWAP_MS = 170;
+const CLEAR_MS = 250;
+const DROP_MS = 340;
+const INVALID_MS = 340;
+const MAX_SPARKS = 420;
 
 const COLORS = Object.freeze({
     background: 0x07131c,
@@ -54,7 +61,8 @@ const COLORS = Object.freeze({
     warning: 0xffbf47,
     selection: 0xffffff,
     hint: 0xffe566,
-    pulse: 0xff73c9
+    pulse: 0xff73c9,
+    ink: 0x061019
 });
 
 const CHIP_COLORS: Readonly<Record<CircuitColor, number>> = Object.freeze({
@@ -66,26 +74,126 @@ const CHIP_COLORS: Readonly<Record<CircuitColor, number>> = Object.freeze({
 });
 
 const CHIP_DARK_COLORS: Readonly<Record<CircuitColor, number>> = Object.freeze({
-    cyan: 0x0e6c86,
-    magenta: 0x862b62,
-    amber: 0x805d1e,
-    lime: 0x46751f,
-    violet: 0x523680
+    cyan: 0x0d3f52,
+    magenta: 0x4d1b3c,
+    amber: 0x4a3714,
+    lime: 0x2b471a,
+    violet: 0x33234d
+});
+
+interface PcbPattern {
+    /** Copper trace segments as [x1, y1, x2, y2], relative to the chip center. */
+    readonly lines: ReadonlyArray<readonly [number, number, number, number]>;
+    /** Solder pads as [x, y] dots at trace ends. */
+    readonly pads: ReadonlyArray<readonly [number, number]>;
+}
+
+/** Every color gets its own printed-circuit trace layout. */
+const PCB_PATTERNS: Readonly<Record<CircuitColor, PcbPattern>> = Object.freeze({
+    cyan: {
+        lines: [
+            [-22, -9, -13, -9], [-22, 0, -16, 0], [-22, 9, -13, 9],
+            [13, -9, 22, -9], [16, 0, 22, 0], [13, 9, 22, 9]
+        ],
+        pads: [[-13, -9], [-16, 0], [-13, 9], [13, -9], [16, 0], [13, 9]]
+    },
+    magenta: {
+        lines: [
+            [-20, -20, -11, -11], [20, -20, 11, -11],
+            [-20, 20, -11, 11], [20, 20, 11, 11]
+        ],
+        pads: [[-11, -11], [11, -11], [-11, 11], [11, 11]]
+    },
+    amber: {
+        lines: [
+            [-22, -11, -14, -11], [-14, -11, -14, -22],
+            [22, 11, 14, 11], [14, 11, 14, 22],
+            [-22, 13, -17, 13], [22, -13, 17, -13]
+        ],
+        pads: [[-14, -11], [14, 11], [-17, 13], [17, -13]]
+    },
+    lime: {
+        lines: [
+            [-9, -22, -9, -13], [0, -22, 0, -16], [9, -22, 9, -13],
+            [-9, 13, -9, 22], [0, 16, 0, 22], [9, 13, 9, 22]
+        ],
+        pads: [[-9, -13], [0, -16], [9, -13], [-9, 13], [0, 16], [9, 13]]
+    },
+    violet: {
+        lines: [
+            [-14, -14, 14, -14], [14, -14, 14, 14],
+            [14, 14, -14, 14], [-14, 14, -14, -14],
+            [-22, 0, -14, 0], [14, 0, 22, 0], [0, -22, 0, -14], [0, 14, 0, 22]
+        ],
+        pads: [[-14, -14], [14, -14], [14, 14], [-14, 14]]
+    }
 });
 
 const HELP_BODY =
     'CLEAR EVERY SHORT CIRCUIT BEFORE MOVES RUN OUT\n\n' +
-    'Tap two neighboring chips to swap them. Match 3 or more of one color. ' +
-    'Only a match uses a move; an invalid swap is free.\n\n' +
-    'Matches touching a red lightning overlay repair that short. ' +
-    'Clear every overlay to win.\n\n' +
-    'Long and crossing matches build beam, burst, and spectrum chips. ' +
+    'Tap two neighboring boards to swap them. Match 3 or more of one color. ' +
+    'Only a match uses a move; an invalid swap snaps back for free.\n\n' +
+    'Sparking shorts ride their board — when it swaps or falls, the short ' +
+    'moves with it. Match or blast a shorted board to repair it. ' +
+    'Repair every short to win.\n\n' +
+    'Long and crossing matches forge beam, burst, and spectrum boards. ' +
     'Swap a special to discharge it.\n\n' +
-    'BOOSTERS: Overclock adds moves, Trace reveals a strong swap, ' +
-    'Pulse clears a 3x3 area, and Reroute shuffles the board.';
+    'BOOSTERS: hover over each one for details, or press 1–4.';
 
 type FinishStatus = 'success' | 'failure' | 'abandoned';
 type BoosterKey = 'extra' | 'hint' | 'pulse' | 'shuffle';
+
+interface Spark {
+    x: number;
+    y: number;
+    velocityX: number;
+    velocityY: number;
+    lifeMs: number;
+    maxLifeMs: number;
+    color: number;
+    size: number;
+}
+
+interface RemovedChipVisual {
+    readonly chip: CircuitChip;
+    readonly index: number;
+}
+
+interface MovedChipVisual {
+    readonly chip: CircuitChip;
+    readonly fromIndex: number;
+    readonly toIndex: number;
+}
+
+interface SpawnedChipVisual {
+    readonly chip: CircuitChip;
+    readonly toIndex: number;
+    readonly spawnRow: number;
+}
+
+interface BoardAnimation {
+    readonly startMs: number;
+    readonly invalid: boolean;
+    readonly swapFrom: number | null;
+    readonly swapTo: number | null;
+    readonly previousChips: readonly CircuitChip[];
+    readonly swappedChips: readonly CircuitChip[];
+    readonly removed: readonly RemovedChipVisual[];
+    readonly moved: readonly MovedChipVisual[];
+    readonly spawned: readonly SpawnedChipVisual[];
+    readonly swapMs: number;
+    readonly clearMs: number;
+    readonly dropMs: number;
+    sparksSpawned: boolean;
+}
+
+interface ChipVisual {
+    readonly chip: CircuitChip;
+    readonly x: number;
+    readonly y: number;
+    readonly scale: number;
+    readonly alpha: number;
+}
 
 function resolveAttemptNumber(runId: string): number {
     const lastSegment = runId.split('/').at(-1);
@@ -116,8 +224,25 @@ function specialName(special: CircuitSpecial): string {
     }
 }
 
-export class CircuitCrushScene extends Phaser.Scene {
-    private launchData!: CircuitCrushLaunchData;
+function hash01(first: number, second: number): number {
+    let value = (Math.imul(first + 1, 0x9e3779b1) ^ Math.imul(second + 1, 0x85ebca6b)) >>> 0;
+    value = Math.imul(value ^ (value >>> 15), 0x2c1b3c6d) >>> 0;
+    return ((value ^ (value >>> 12)) >>> 0) / 0x1_0000_0000;
+}
+
+function easeInOutQuad(t: number): number {
+    return t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2;
+}
+
+/** Fall fast, then settle with a small dip past the target and back. */
+function dropEase(t: number): number {
+    if (t < 0.72) return (t / 0.72) ** 2;
+    const settle = (t - 0.72) / 0.28;
+    return 1 + Math.sin(settle * Math.PI) * 0.05;
+}
+
+export class CircuitCrashScene extends Phaser.Scene {
+    private launchData!: CircuitCrashLaunchData;
     private state!: CircuitPuzzleState;
     private boardGraphics!: Phaser.GameObjects.Graphics;
     private meterGraphics!: Phaser.GameObjects.Graphics;
@@ -125,6 +250,8 @@ export class CircuitCrushScene extends Phaser.Scene {
     private shortsText!: Phaser.GameObjects.Text;
     private scoreText!: Phaser.GameObjects.Text;
     private statusText!: Phaser.GameObjects.Text;
+    private tooltipPanel!: Phaser.GameObjects.Rectangle;
+    private tooltipText!: Phaser.GameObjects.Text;
     private boosterTexts = new Map<BoosterKey, Phaser.GameObjects.Text>();
     private helpObjects: Phaser.GameObjects.GameObject[] = [];
     private selectedIndex: number | null = null;
@@ -135,14 +262,15 @@ export class CircuitCrushScene extends Phaser.Scene {
     private finishTimer: Phaser.Time.TimerEvent | null = null;
     private activeElapsedMs = 0;
     private animationClockMs = 0;
-    private flashIndices: readonly number[] = [];
-    private flashUntilMs = 0;
+    private animation: BoardAnimation | null = null;
+    private sparks: Spark[] = [];
+    private shortSparkBands = new Map<number, number>();
 
     constructor() {
-        super({key: CIRCUIT_CRUSH_SCENE_KEY});
+        super({key: CIRCUIT_CRASH_SCENE_KEY});
     }
 
-    create(data: CircuitCrushLaunchData): void {
+    create(data: CircuitCrashLaunchData): void {
         this.launchData = data;
         this.state = createCircuitPuzzle(new Mulberry32Random(data.context.seed), {
             size: 8,
@@ -176,21 +304,22 @@ export class CircuitCrushScene extends Phaser.Scene {
         this.finishTimer = null;
         this.activeElapsedMs = 0;
         this.animationClockMs = 0;
-        this.flashIndices = [];
-        this.flashUntilMs = 0;
+        this.animation = null;
+        this.sparks = [];
+        this.shortSparkBands.clear();
         this.helpObjects = [];
         this.boosterTexts.clear();
 
         this.cameras.main.setBackgroundColor(COLORS.background);
         this.add.rectangle(VIEW_SIZE / 2, VIEW_SIZE / 2, 650, 650, COLORS.panel, 0.6)
             .setStrokeStyle(2, COLORS.panelBorder);
-        this.add.text(18, 14, 'CIRCUIT CRUSH', {
+        this.add.text(18, 14, 'CIRCUIT CRASH', {
             color: '#72f4df',
             fontFamily: 'Georgia, serif',
             fontSize: '28px',
             fontStyle: 'bold'
         });
-        this.add.text(18, 49, 'Match colored signal chips. Repair every sparking short.', {
+        this.add.text(18, 49, 'Match colored circuit boards. Repair every sparking short.', {
             color: '#9bc4cd',
             fontFamily: 'Georgia, serif',
             fontSize: '14px'
@@ -200,7 +329,7 @@ export class CircuitCrushScene extends Phaser.Scene {
             fontFamily: 'monospace',
             fontSize: '12px'
         });
-        this.add.text(73, 76, 'TAP 2 CHIPS  /  ARROWS + ENTER', {
+        this.add.text(73, 76, 'TAP 2 BOARDS  /  ARROWS + ENTER', {
             color: '#e8fbff',
             fontFamily: 'monospace',
             fontSize: '12px'
@@ -221,6 +350,7 @@ export class CircuitCrushScene extends Phaser.Scene {
         this.createBoardInput();
         this.createSidePanel();
         this.createHeaderButtons();
+        this.createTooltip();
 
         this.statusText = this.add.text(18, 595, '', {
             color: '#72f4df',
@@ -252,9 +382,7 @@ export class CircuitCrushScene extends Phaser.Scene {
         if (!this.helpOpen && !this.finishing && this.state.terminalStatus === 'active') {
             this.activeElapsedMs += safeDelta;
         }
-        if (this.flashIndices.length > 0 && this.animationClockMs >= this.flashUntilMs) {
-            this.flashIndices = [];
-        }
+        this.updateSparks(safeDelta);
         this.drawBoard();
     }
 
@@ -318,18 +446,19 @@ export class CircuitCrushScene extends Phaser.Scene {
             fontSize: '14px',
             fontStyle: 'bold'
         }).setDepth(5);
-        this.createBoosterButton(321, 'extra', '1  OVERCLOCK', 0x246278, () => {
+        this.createBoosterButton(321, 'extra', 'OVERCLOCK', 0x246278, () => {
             this.useImmediateBooster('extra');
         });
-        this.createBoosterButton(374, 'hint', '2  TRACE', 0x65592b, () => {
+        this.createBoosterButton(374, 'hint', 'TRACE', 0x65592b, () => {
             this.useImmediateBooster('hint');
         });
-        this.createBoosterButton(427, 'pulse', '3  PULSE', 0x752e65, () => {
+        this.createBoosterButton(427, 'pulse', 'PULSE', 0x752e65, () => {
             this.togglePulseTargeting();
         });
-        this.createBoosterButton(480, 'shuffle', '4  REROUTE', 0x3f3b75, () => {
+        this.createBoosterButton(480, 'shuffle', 'REROUTE', 0x3f3b75, () => {
             this.useImmediateBooster('shuffle');
         });
+        this.drawBoosterIcons();
 
         this.add.text(PANEL_X + 10, 520,
             'SPECIALS\n━ row  ┃ column\n✦ burst  ◉ spectrum',
@@ -361,18 +490,117 @@ export class CircuitCrushScene extends Phaser.Scene {
             .setStrokeStyle(2, 0x8ec4cf)
             .setDepth(5)
             .setInteractive({useHandCursor: true});
-        const text = this.add.text(x, y, label, {
+        const text = this.add.text(PANEL_X + 42, y, label, {
             color: '#e8fbff',
             fontFamily: 'monospace',
             fontSize: '12px',
-            fontStyle: 'bold',
-            align: 'center'
-        }).setOrigin(0.5).setDepth(6);
+            fontStyle: 'bold'
+        }).setOrigin(0, 0.5).setDepth(6);
         button.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
             pointer.event.preventDefault();
             if (!this.helpOpen && !this.finishing) action();
         });
+        button.on('pointerover', () => {
+            if (!this.helpOpen && !this.finishing) {
+                button.setStrokeStyle(2, 0xe8fbff);
+                this.showBoosterTooltip(key, y);
+            }
+        });
+        button.on('pointerout', () => {
+            button.setStrokeStyle(2, 0x8ec4cf);
+            this.hideBoosterTooltip();
+        });
         this.boosterTexts.set(key, text);
+    }
+
+    /** Small pictograms that read at a glance: what each booster does. */
+    private drawBoosterIcons(): void {
+        const graphics = this.add.graphics().setDepth(7);
+        const iconX = PANEL_X + 24;
+
+        // Overclock: a lightning bolt — instant extra power (moves).
+        let y = 321;
+        graphics.fillStyle(COLORS.warning, 1);
+        graphics.fillTriangle(iconX + 2, y - 12, iconX - 8, y + 3, iconX - 1, y + 3);
+        graphics.fillTriangle(iconX - 2, y + 12, iconX + 8, y - 3, iconX + 1, y - 3);
+
+        // Trace: a magnifying glass — it finds the best swap for you.
+        y = 374;
+        graphics.lineStyle(3, COLORS.hint, 1);
+        graphics.strokeCircle(iconX - 2, y - 3, 7);
+        graphics.lineBetween(iconX + 3, y + 2, iconX + 9, y + 9);
+
+        // Pulse: a crosshair — aim it, then zap a 3×3 area.
+        y = 427;
+        graphics.lineStyle(2.5, COLORS.pulse, 1);
+        graphics.strokeCircle(iconX, y, 8);
+        graphics.lineBetween(iconX - 12, y, iconX - 5, y);
+        graphics.lineBetween(iconX + 5, y, iconX + 12, y);
+        graphics.lineBetween(iconX, y - 12, iconX, y - 5);
+        graphics.lineBetween(iconX, y + 5, iconX, y + 12);
+        graphics.fillStyle(COLORS.pulse, 1);
+        graphics.fillCircle(iconX, y, 2);
+
+        // Reroute: crossing arrows — every board gets shuffled somewhere new.
+        y = 480;
+        graphics.lineStyle(3, 0xb9a5ff, 1);
+        graphics.lineBetween(iconX - 10, y - 6, iconX + 6, y + 6);
+        graphics.lineBetween(iconX - 10, y + 6, iconX + 6, y - 6);
+        graphics.fillStyle(0xb9a5ff, 1);
+        graphics.fillTriangle(iconX + 11, y + 8, iconX + 3, y + 7, iconX + 8, y + 1);
+        graphics.fillTriangle(iconX + 11, y - 8, iconX + 3, y - 7, iconX + 8, y - 1);
+    }
+
+    private createTooltip(): void {
+        this.tooltipPanel = this.add.rectangle(0, 0, 296, 86, 0x061019, 0.97)
+            .setStrokeStyle(2, COLORS.accent)
+            .setDepth(60)
+            .setVisible(false);
+        this.tooltipText = this.add.text(0, 0, '', {
+            color: '#e8fbff',
+            fontFamily: 'monospace',
+            fontSize: '11px',
+            lineSpacing: 4,
+            wordWrap: {width: 272}
+        }).setOrigin(0, 0.5).setDepth(61).setVisible(false);
+    }
+
+    private boosterTooltipCopy(key: BoosterKey): string {
+        switch (key) {
+            case 'extra':
+                return `OVERCLOCK · +${this.state.config.extraMoveAmount} MOVES\n` +
+                    `Instantly adds ${this.state.config.extraMoveAmount} moves ` +
+                    'to your budget.';
+            case 'hint':
+                return 'TRACE · REVEALS THE BEST SWAP\n' +
+                    'Highlights the two boards of the strongest move, ' +
+                    'prioritizing short repairs. Costs no move.';
+            case 'pulse':
+                return 'PULSE · TARGETED 3×3 ZAP\n' +
+                    'Arms a zap: tap any cell to clear its 3×3 area and ' +
+                    'repair any shorts riding those boards. Costs no move.';
+            case 'shuffle':
+                return 'REROUTE · RESHUFFLES THE GRID\n' +
+                    'Deals a fresh solvable layout. Shorts keep their ' +
+                    'cells and ride the new boards. Costs no move.';
+        }
+    }
+
+    private showBoosterTooltip(key: BoosterKey, buttonY: number): void {
+        const copy = this.boosterTooltipCopy(key);
+        this.tooltipText.setText(copy);
+        const height = this.tooltipText.height + 18;
+        const x = PANEL_X - 316;
+        this.tooltipPanel
+            .setSize(296, height)
+            .setPosition(x + 148, buttonY)
+            .setVisible(true);
+        this.tooltipText.setPosition(x + 12, buttonY).setVisible(true);
+    }
+
+    private hideBoosterTooltip(): void {
+        this.tooltipPanel.setVisible(false);
+        this.tooltipText.setVisible(false);
     }
 
     private createButton(
@@ -493,13 +721,14 @@ export class CircuitCrushScene extends Phaser.Scene {
         }
         this.cursorIndex = index;
         if (this.pulseTargeting) {
+            const before = this.state;
             this.state = activateCircuitBooster(this.state, {
                 kind: 'pulse',
                 cellIndex: index
             });
             this.pulseTargeting = false;
             this.selectedIndex = null;
-            this.afterModelAction();
+            this.afterModelAction(before);
             return;
         }
         if (this.selectedIndex === null) {
@@ -523,15 +752,16 @@ export class CircuitCrushScene extends Phaser.Scene {
             this.state.height
         )) {
             this.selectedIndex = index;
-            this.statusText.setText('CHOOSE A NEIGHBORING CHIP TO SWAP');
+            this.statusText.setText('CHOOSE A NEIGHBORING BOARD TO SWAP');
             this.publishTelemetry();
             return;
         }
 
         const fromIndex = this.selectedIndex;
         this.selectedIndex = null;
+        const before = this.state;
         this.state = applyCircuitSwap(this.state, fromIndex, index);
-        this.afterModelAction();
+        this.afterModelAction(before);
     }
 
     private useImmediateBooster(key: Exclude<BoosterKey, 'pulse'>): void {
@@ -544,6 +774,7 @@ export class CircuitCrushScene extends Phaser.Scene {
         }
         this.pulseTargeting = false;
         this.selectedIndex = null;
+        const before = this.state;
         switch (key) {
             case 'extra':
                 this.state = activateCircuitBooster(this.state, {kind: 'extra-moves'});
@@ -555,7 +786,7 @@ export class CircuitCrushScene extends Phaser.Scene {
                 this.state = activateCircuitBooster(this.state, {kind: 'shuffle'});
                 break;
         }
-        this.afterModelAction();
+        this.afterModelAction(before);
     }
 
     private togglePulseTargeting(): void {
@@ -568,34 +799,248 @@ export class CircuitCrushScene extends Phaser.Scene {
         }
         this.selectedIndex = null;
         if (this.state.boosterCharges.pulses <= 0) {
+            const before = this.state;
             this.state = activateCircuitBooster(this.state, {
                 kind: 'pulse',
                 cellIndex: this.cursorIndex
             });
             this.pulseTargeting = false;
-            this.afterModelAction();
+            this.afterModelAction(before);
             return;
         }
         this.pulseTargeting = !this.pulseTargeting;
         this.statusText.setText(
             this.pulseTargeting
-                ? 'PULSE ARMED · TAP A CHIP TO CLEAR ITS 3×3 AREA'
+                ? 'PULSE ARMED · TAP A BOARD TO CLEAR ITS 3×3 AREA'
                 : 'PULSE TARGETING CANCELLED'
         );
         this.publishTelemetry();
     }
 
-    private afterModelAction(): void {
-        this.flashIndices = this.state.lastEvent.affectedIndices;
-        this.flashUntilMs = this.animationClockMs + 560;
+    private afterModelAction(before: CircuitPuzzleState): void {
+        this.startBoardAnimation(before);
+        this.celebrateEvent(before);
         this.syncPresentation();
         if (this.state.terminalStatus !== 'active' && !this.finishing) {
             this.finishing = true;
             const terminalStatus = this.state.terminalStatus;
-            this.finishTimer = this.time.delayedCall(900, () => {
+            this.finishTimer = this.time.delayedCall(1_000, () => {
                 this.finish(terminalStatus);
             });
         }
+    }
+
+    /**
+     * Builds a purely visual timeline by diffing chip ids between the board
+     * before and after the action: survivors slide, casualties pop, and
+     * refills rain in from above. Telemetry stays synchronous.
+     */
+    private startBoardAnimation(before: CircuitPuzzleState): void {
+        const event = this.state.lastEvent;
+        if (event.kind === 'invalid-swap'
+            && event.fromIndex !== null
+            && event.toIndex !== null) {
+            this.animation = {
+                startMs: this.animationClockMs,
+                invalid: true,
+                swapFrom: event.fromIndex,
+                swapTo: event.toIndex,
+                previousChips: this.state.chips,
+                swappedChips: this.state.chips,
+                removed: [],
+                moved: [],
+                spawned: [],
+                swapMs: INVALID_MS,
+                clearMs: 0,
+                dropMs: 0,
+                sparksSpawned: true
+            };
+            return;
+        }
+
+        const animatable = event.kind === 'swap-resolved'
+            || event.kind === 'success'
+            || event.kind === 'failure'
+            || event.kind === 'booster-pulse'
+            || event.kind === 'booster-shuffle'
+            || event.kind === 'no-move-shuffle';
+        if (!animatable) return;
+
+        const isSwap = event.fromIndex !== null && event.toIndex !== null;
+        let swappedChips = before.chips;
+        if (isSwap) {
+            const exchanged = [...before.chips];
+            const first = exchanged[event.fromIndex!]!;
+            exchanged[event.fromIndex!] = exchanged[event.toIndex!]!;
+            exchanged[event.toIndex!] = first;
+            swappedChips = exchanged;
+        }
+
+        const nextIndexById = new Map<number, number>();
+        this.state.chips.forEach((chip, index) => nextIndexById.set(chip.id, index));
+        const previousIds = new Set(swappedChips.map(chip => chip.id));
+
+        const removed: RemovedChipVisual[] = [];
+        const moved: MovedChipVisual[] = [];
+        swappedChips.forEach((chip, index) => {
+            const nextIndex = nextIndexById.get(chip.id);
+            if (nextIndex === undefined) {
+                removed.push({chip, index});
+            } else if (nextIndex !== index) {
+                moved.push({chip: this.state.chips[nextIndex]!, fromIndex: index, toIndex: nextIndex});
+            }
+        });
+
+        const spawnedByColumn = new Map<number, SpawnedChipVisual[]>();
+        this.state.chips.forEach((chip, index) => {
+            if (previousIds.has(chip.id)) return;
+            const column = index % this.state.width;
+            const list = spawnedByColumn.get(column) ?? [];
+            list.push({chip, toIndex: index, spawnRow: 0});
+            spawnedByColumn.set(column, list);
+        });
+        const spawned: SpawnedChipVisual[] = [];
+        for (const list of spawnedByColumn.values()) {
+            list.sort((first, second) => first.toIndex - second.toIndex);
+            list.forEach((entry, position) => {
+                spawned.push({...entry, spawnRow: -(list.length - position)});
+            });
+        }
+
+        this.animation = {
+            startMs: this.animationClockMs,
+            invalid: false,
+            swapFrom: isSwap ? event.fromIndex : null,
+            swapTo: isSwap ? event.toIndex : null,
+            previousChips: before.chips,
+            swappedChips,
+            removed,
+            moved,
+            spawned,
+            swapMs: isSwap ? SWAP_MS : 0,
+            clearMs: removed.length > 0 ? CLEAR_MS : 0,
+            dropMs: moved.length > 0 || spawned.length > 0 ? DROP_MS : 0,
+            sparksSpawned: false
+        };
+    }
+
+    /** Score popups, cascade callouts, repair labels, and a little shake. */
+    private celebrateEvent(before: CircuitPuzzleState): void {
+        const event = this.state.lastEvent;
+        const scoreGain = this.state.score - before.score;
+        if (scoreGain > 0) {
+            const centroid = this.affectedCentroid(event.affectedIndices);
+            this.spawnFloatingLabel(centroid.x, centroid.y, `+${scoreGain}`, '#72f4df', 20);
+        }
+        if (event.cascades >= 2) {
+            this.spawnFloatingLabel(
+                CIRCUIT_BOARD_ORIGIN.x + BOARD_SIZE / 2,
+                CIRCUIT_BOARD_ORIGIN.y + BOARD_SIZE / 2 + 44,
+                `CASCADE ×${event.cascades}`,
+                '#ffe566',
+                24
+            );
+        }
+        if (event.blockersCleared > 0) {
+            before.chips.forEach((chip, index) => {
+                if (!chip.shorted) return;
+                const survives = this.state.chips.some(candidate =>
+                    candidate.id === chip.id && candidate.shorted
+                );
+                if (survives) return;
+                const position = this.cellCenter(index);
+                this.spawnFloatingLabel(position.x, position.y - 10, 'SHORT REPAIRED', '#ffbf47', 13);
+                this.spawnSparkBurst(position.x, position.y, COLORS.warning, 16);
+            });
+            this.cameras.main.shake(150, 0.0035);
+        } else if (event.cascades >= 2 || event.specialsActivated > 0) {
+            this.cameras.main.shake(110, 0.002);
+        }
+        if (event.kind === 'success') {
+            this.cameras.main.flash(320, 40, 220, 190);
+        }
+    }
+
+    private affectedCentroid(indices: readonly number[]): {x: number; y: number} {
+        if (indices.length === 0) {
+            return {
+                x: CIRCUIT_BOARD_ORIGIN.x + BOARD_SIZE / 2,
+                y: CIRCUIT_BOARD_ORIGIN.y + BOARD_SIZE / 2
+            };
+        }
+        let sumX = 0;
+        let sumY = 0;
+        for (const index of indices) {
+            const center = this.cellCenter(index);
+            sumX += center.x;
+            sumY += center.y;
+        }
+        return {x: sumX / indices.length, y: sumY / indices.length};
+    }
+
+    private cellCenter(index: number): {x: number; y: number} {
+        return {
+            x: CIRCUIT_BOARD_ORIGIN.x + (index % this.state.width) * CIRCUIT_TILE_SIZE
+                + CIRCUIT_TILE_SIZE / 2,
+            y: CIRCUIT_BOARD_ORIGIN.y + Math.floor(index / this.state.width) * CIRCUIT_TILE_SIZE
+                + CIRCUIT_TILE_SIZE / 2
+        };
+    }
+
+    private spawnFloatingLabel(
+        x: number,
+        y: number,
+        message: string,
+        color: string,
+        fontSize: number
+    ): void {
+        const label = this.add.text(x, y, message, {
+            color,
+            fontFamily: 'monospace',
+            fontSize: `${fontSize}px`,
+            fontStyle: 'bold',
+            stroke: '#061019',
+            strokeThickness: 4
+        }).setOrigin(0.5).setDepth(50);
+        this.tweens.add({
+            targets: label,
+            y: y - 34,
+            alpha: 0,
+            scale: 1.12,
+            duration: 950,
+            ease: 'Cubic.easeOut',
+            onComplete: () => label.destroy()
+        });
+    }
+
+    private spawnSparkBurst(x: number, y: number, color: number, count: number): void {
+        for (let index = 0; index < count; index++) {
+            if (this.sparks.length >= MAX_SPARKS) return;
+            const angle = Math.random() * Math.PI * 2;
+            const speed = 60 + Math.random() * 190;
+            this.sparks.push({
+                x,
+                y,
+                velocityX: Math.cos(angle) * speed,
+                velocityY: Math.sin(angle) * speed - 60,
+                lifeMs: 0,
+                maxLifeMs: 380 + Math.random() * 320,
+                color: Math.random() < 0.3 ? 0xffffff : color,
+                size: 1.5 + Math.random() * 2.5
+            });
+        }
+    }
+
+    private updateSparks(deltaMs: number): void {
+        const seconds = deltaMs / 1_000;
+        this.sparks = this.sparks.filter(spark => {
+            spark.lifeMs += deltaMs;
+            if (spark.lifeMs >= spark.maxLifeMs) return false;
+            spark.x += spark.velocityX * seconds;
+            spark.y += spark.velocityY * seconds;
+            spark.velocityY += 540 * seconds;
+            return true;
+        });
     }
 
     private syncPresentation(): void {
@@ -615,16 +1060,16 @@ export class CircuitCrushScene extends Phaser.Scene {
         );
 
         this.boosterTexts.get('extra')?.setText(
-            `1  OVERCLOCK  ×${this.state.boosterCharges.extraMoves}`
+            `1 OVERCLOCK ×${this.state.boosterCharges.extraMoves}`
         );
         this.boosterTexts.get('hint')?.setText(
-            `2  TRACE      ×${this.state.boosterCharges.hints}`
+            `2 TRACE    ×${this.state.boosterCharges.hints}`
         );
         this.boosterTexts.get('pulse')?.setText(
-            `3  PULSE      ×${this.state.boosterCharges.pulses}`
+            `3 PULSE    ×${this.state.boosterCharges.pulses}`
         );
         this.boosterTexts.get('shuffle')?.setText(
-            `4  REROUTE    ×${this.state.boosterCharges.shuffles}`
+            `4 REROUTE  ×${this.state.boosterCharges.shuffles}`
         );
 
         this.meterGraphics.clear();
@@ -645,6 +1090,127 @@ export class CircuitCrushScene extends Phaser.Scene {
         this.publishTelemetry();
     }
 
+    /**
+     * Resolves what to draw this frame: the resting board, or a snapshot of
+     * the swap → pop → drop timeline that follows every resolved action.
+     */
+    private computeChipVisuals(): ChipVisual[] {
+        const animation = this.animation;
+        if (animation !== null) {
+            const elapsed = this.animationClockMs - animation.startMs;
+            const swapEnd = animation.swapMs;
+            const clearEnd = swapEnd + animation.clearMs;
+            const dropEnd = clearEnd + animation.dropMs;
+            if (elapsed >= dropEnd) {
+                this.animation = null;
+            } else if (animation.invalid) {
+                return this.computeSwapVisuals(
+                    animation,
+                    elapsed < swapEnd / 2
+                        ? elapsed / (swapEnd / 2)
+                        : Math.max(0, 1 - (elapsed - swapEnd / 2) / (swapEnd / 2))
+                );
+            } else if (elapsed < swapEnd) {
+                return this.computeSwapVisuals(animation, elapsed / swapEnd);
+            } else if (elapsed < clearEnd) {
+                return this.computeClearVisuals(animation, (elapsed - swapEnd) / animation.clearMs);
+            } else {
+                return this.computeDropVisuals(animation, (elapsed - clearEnd) / animation.dropMs);
+            }
+        }
+        return this.state.chips.map((chip, index) => {
+            const center = this.cellCenter(index);
+            return {chip, x: center.x, y: center.y, scale: 1, alpha: 1};
+        });
+    }
+
+    private computeSwapVisuals(animation: BoardAnimation, progress: number): ChipVisual[] {
+        const eased = easeInOutQuad(Math.min(1, Math.max(0, progress)));
+        return animation.previousChips.map((chip, index) => {
+            let x: number;
+            let y: number;
+            if (index === animation.swapFrom || index === animation.swapTo) {
+                const partner = index === animation.swapFrom
+                    ? animation.swapTo!
+                    : animation.swapFrom!;
+                const from = this.cellCenter(index);
+                const to = this.cellCenter(partner);
+                x = from.x + (to.x - from.x) * eased;
+                y = from.y + (to.y - from.y) * eased;
+            } else {
+                const center = this.cellCenter(index);
+                x = center.x;
+                y = center.y;
+            }
+            return {chip, x, y, scale: 1, alpha: 1};
+        });
+    }
+
+    private computeClearVisuals(animation: BoardAnimation, progress: number): ChipVisual[] {
+        if (!animation.sparksSpawned) {
+            animation.sparksSpawned = true;
+            for (const removal of animation.removed) {
+                const center = this.cellCenter(removal.index);
+                this.spawnSparkBurst(
+                    center.x,
+                    center.y,
+                    CHIP_COLORS[removal.chip.color],
+                    removal.chip.shorted ? 14 : 8
+                );
+            }
+        }
+        const removedIndices = new Map(
+            animation.removed.map(removal => [removal.index, removal])
+        );
+        return animation.swappedChips.map((chip, index) => {
+            const center = this.cellCenter(index);
+            if (!removedIndices.has(index)) {
+                return {chip, x: center.x, y: center.y, scale: 1, alpha: 1};
+            }
+            // Pop: briefly swell, then collapse to nothing.
+            const scale = progress < 0.3
+                ? 1 + (progress / 0.3) * 0.28
+                : Math.max(0, 1.28 * (1 - (progress - 0.3) / 0.7));
+            return {chip, x: center.x, y: center.y, scale, alpha: Math.max(0, 1 - progress * 0.85)};
+        });
+    }
+
+    private computeDropVisuals(animation: BoardAnimation, progress: number): ChipVisual[] {
+        const eased = dropEase(Math.min(1, Math.max(0, progress)));
+        const movedByTarget = new Map(animation.moved.map(move => [move.toIndex, move]));
+        const spawnedByTarget = new Map(animation.spawned.map(spawn => [spawn.toIndex, spawn]));
+        return this.state.chips.map((chip, index) => {
+            const target = this.cellCenter(index);
+            const move = movedByTarget.get(index);
+            if (move !== undefined) {
+                const from = this.cellCenter(move.fromIndex);
+                return {
+                    chip,
+                    x: from.x + (target.x - from.x) * eased,
+                    y: from.y + (target.y - from.y) * eased,
+                    scale: 1,
+                    alpha: 1
+                };
+            }
+            const spawn = spawnedByTarget.get(index);
+            if (spawn !== undefined) {
+                const fromY = CIRCUIT_BOARD_ORIGIN.y
+                    + spawn.spawnRow * CIRCUIT_TILE_SIZE
+                    + CIRCUIT_TILE_SIZE / 2;
+                const y = fromY + (target.y - fromY) * eased;
+                // There is no render mask, so refills fade in as they cross
+                // the top edge instead of drawing over the header.
+                const alpha = Phaser.Math.Clamp(
+                    (y - (CIRCUIT_BOARD_ORIGIN.y + 8)) / 26,
+                    0,
+                    1
+                );
+                return {chip, x: target.x, y, scale: 1, alpha};
+            }
+            return {chip, x: target.x, y: target.y, scale: 1, alpha: 1};
+        });
+    }
+
     private drawBoard(): void {
         if (!this.boardGraphics) return;
         const graphics = this.boardGraphics;
@@ -654,7 +1220,6 @@ export class CircuitCrushScene extends Phaser.Scene {
             hintIndices.add(this.state.lastHint.swap.fromIndex);
             hintIndices.add(this.state.lastHint.swap.toIndex);
         }
-        const flashing = new Set(this.flashIndices);
 
         graphics.clear();
         graphics.fillStyle(0x050d13, 1);
@@ -677,38 +1242,35 @@ export class CircuitCrushScene extends Phaser.Scene {
         for (let index = 0; index < this.state.chips.length; index++) {
             const column = index % this.state.width;
             const row = Math.floor(index / this.state.width);
-            const x = CIRCUIT_BOARD_ORIGIN.x + column * CIRCUIT_TILE_SIZE;
-            const y = CIRCUIT_BOARD_ORIGIN.y + row * CIRCUIT_TILE_SIZE;
-            const centerX = x + CIRCUIT_TILE_SIZE / 2;
-            const centerY = y + CIRCUIT_TILE_SIZE / 2;
-            const chip = this.state.chips[index]!;
-
             graphics.fillStyle(
                 (column + row) % 2 === 0 ? COLORS.grid : COLORS.gridAlternate,
                 1
             );
             graphics.fillRoundedRect(
-                x + 2,
-                y + 2,
+                CIRCUIT_BOARD_ORIGIN.x + column * CIRCUIT_TILE_SIZE + 2,
+                CIRCUIT_BOARD_ORIGIN.y + row * CIRCUIT_TILE_SIZE + 2,
                 CIRCUIT_TILE_SIZE - 4,
                 CIRCUIT_TILE_SIZE - 4,
                 7
             );
-            this.drawChip(graphics, centerX, centerY, chip.color, chip.special, pulse);
+        }
 
-            if (this.state.blockers[index]! > 0) {
-                this.drawShortCircuit(graphics, x, y, centerX, centerY, pulse);
-            }
-            if (flashing.has(index)) {
-                graphics.fillStyle(COLORS.accent, Math.max(0.08, 0.28 * pulse));
-                graphics.fillRoundedRect(
-                    x + 3,
-                    y + 3,
-                    CIRCUIT_TILE_SIZE - 6,
-                    CIRCUIT_TILE_SIZE - 6,
-                    7
-                );
-            }
+        for (const visual of this.computeChipVisuals()) {
+            if (visual.scale <= 0.01 || visual.alpha <= 0.01) continue;
+            this.drawChip(graphics, visual, pulse);
+        }
+
+        for (const spark of this.sparks) {
+            const fade = 1 - spark.lifeMs / spark.maxLifeMs;
+            graphics.fillStyle(spark.color, fade);
+            graphics.fillCircle(spark.x, spark.y, spark.size * fade + 0.6);
+        }
+
+        for (let index = 0; index < this.state.chips.length; index++) {
+            const column = index % this.state.width;
+            const row = Math.floor(index / this.state.width);
+            const x = CIRCUIT_BOARD_ORIGIN.x + column * CIRCUIT_TILE_SIZE;
+            const y = CIRCUIT_BOARD_ORIGIN.y + row * CIRCUIT_TILE_SIZE;
             if (hintIndices.has(index)) {
                 graphics.lineStyle(4, COLORS.hint, 0.68 + pulse * 0.32);
                 graphics.strokeRoundedRect(
@@ -743,71 +1305,91 @@ export class CircuitCrushScene extends Phaser.Scene {
         }
 
         if (this.pulseTargeting) {
-            const column = this.cursorIndex % this.state.width;
-            const row = Math.floor(this.cursorIndex / this.state.width);
+            const center = this.cellCenter(this.cursorIndex);
             graphics.lineStyle(3, COLORS.pulse, 0.66 + pulse * 0.34);
-            graphics.strokeCircle(
-                CIRCUIT_BOARD_ORIGIN.x + column * CIRCUIT_TILE_SIZE
-                    + CIRCUIT_TILE_SIZE / 2,
-                CIRCUIT_BOARD_ORIGIN.y + row * CIRCUIT_TILE_SIZE
-                    + CIRCUIT_TILE_SIZE / 2,
-                20 + pulse * 5
-            );
+            graphics.strokeCircle(center.x, center.y, 20 + pulse * 5);
         }
     }
 
+    /** Draws one chip as a small printed circuit board in its color family. */
     private drawChip(
         graphics: Phaser.GameObjects.Graphics,
-        x: number,
-        y: number,
-        color: CircuitColor,
-        special: CircuitSpecial,
+        visual: ChipVisual,
         pulse: number
     ): void {
-        const bright = CHIP_COLORS[color];
-        const dark = CHIP_DARK_COLORS[color];
-        graphics.fillStyle(dark, 0.96);
-        graphics.fillRoundedRect(x - 19, y - 19, 38, 38, 9);
-        graphics.lineStyle(2, bright, 0.92);
-        graphics.strokeRoundedRect(x - 19, y - 19, 38, 38, 9);
+        const {chip, x, y, scale, alpha} = visual;
+        const bright = CHIP_COLORS[chip.color];
+        const dark = CHIP_DARK_COLORS[chip.color];
 
-        graphics.lineStyle(2, bright, 0.55);
-        graphics.lineBetween(x - 24, y - 11, x - 16, y - 11);
-        graphics.lineBetween(x - 24, y + 11, x - 16, y + 11);
-        graphics.lineBetween(x + 16, y - 11, x + 24, y - 11);
-        graphics.lineBetween(x + 16, y + 11, x + 24, y + 11);
-        graphics.lineBetween(x - 11, y - 24, x - 11, y - 16);
-        graphics.lineBetween(x + 11, y - 24, x + 11, y - 16);
-        graphics.lineBetween(x - 11, y + 16, x - 11, y + 24);
-        graphics.lineBetween(x + 11, y + 16, x + 11, y + 24);
+        graphics.save();
+        graphics.translateCanvas(x, y);
+        graphics.scaleCanvas(scale, scale);
 
-        graphics.fillStyle(bright, 0.25 + pulse * 0.2);
-        graphics.fillCircle(x, y, special === 'none' ? 12 : 15);
-        graphics.fillStyle(bright, 1);
+        // PCB substrate with a soft inner glow and copper border.
+        graphics.fillStyle(dark, 0.97 * alpha);
+        graphics.fillRoundedRect(-22, -22, 44, 44, 6);
+        graphics.fillStyle(bright, 0.08 * alpha);
+        graphics.fillRoundedRect(-18, -18, 36, 36, 5);
+        graphics.lineStyle(2, bright, 0.92 * alpha);
+        graphics.strokeRoundedRect(-22, -22, 44, 44, 6);
 
-        switch (special) {
-            case 'none':
-                graphics.fillRoundedRect(x - 7, y - 7, 14, 14, 3);
-                graphics.fillStyle(COLORS.paper, 0.8);
-                graphics.fillCircle(x, y, 3);
+        // Copper traces and solder pads — each color family has its own layout.
+        const pattern = PCB_PATTERNS[chip.color];
+        graphics.lineStyle(2, bright, 0.72 * alpha);
+        for (const [x1, y1, x2, y2] of pattern.lines) {
+            graphics.lineBetween(x1, y1, x2, y2);
+        }
+        graphics.fillStyle(bright, 0.95 * alpha);
+        for (const [padX, padY] of pattern.pads) {
+            graphics.fillCircle(padX, padY, 2);
+        }
+
+        if (chip.special !== 'none') {
+            graphics.fillStyle(bright, (0.22 + pulse * 0.22) * alpha);
+            graphics.fillCircle(0, 0, 16);
+        }
+
+        switch (chip.special) {
+            case 'none': {
+                // Center component: a little IC with legs.
+                graphics.fillStyle(bright, 0.28 * alpha);
+                graphics.lineStyle(1.5, bright, 0.85 * alpha);
+                for (const side of [-1, 1]) {
+                    for (const leg of [-6, 0, 6]) {
+                        graphics.lineBetween(side * 9, leg, side * 13, leg);
+                    }
+                }
+                graphics.fillStyle(COLORS.ink, 0.95 * alpha);
+                graphics.fillRoundedRect(-9, -8, 18, 16, 2);
+                graphics.lineStyle(1.5, bright, 0.9 * alpha);
+                graphics.strokeRoundedRect(-9, -8, 18, 16, 2);
+                graphics.fillStyle(bright, 0.9 * alpha);
+                graphics.fillCircle(-5, -4, 1.6);
                 break;
+            }
             case 'row':
-                graphics.fillRoundedRect(x - 16, y - 4, 32, 8, 3);
-                graphics.fillTriangle(x - 18, y, x - 9, y - 9, x - 9, y + 9);
-                graphics.fillTriangle(x + 18, y, x + 9, y - 9, x + 9, y + 9);
+                graphics.fillStyle(bright, alpha);
+                graphics.fillRoundedRect(-16, -4, 32, 8, 3);
+                graphics.fillTriangle(-18, 0, -9, -9, -9, 9);
+                graphics.fillTriangle(18, 0, 9, -9, 9, 9);
+                graphics.fillStyle(COLORS.paper, 0.85 * alpha);
+                graphics.fillRoundedRect(-12, -1.5, 24, 3, 1);
                 break;
             case 'column':
-                graphics.fillRoundedRect(x - 4, y - 16, 8, 32, 3);
-                graphics.fillTriangle(x, y - 18, x - 9, y - 9, x + 9, y - 9);
-                graphics.fillTriangle(x, y + 18, x - 9, y + 9, x + 9, y + 9);
+                graphics.fillStyle(bright, alpha);
+                graphics.fillRoundedRect(-4, -16, 8, 32, 3);
+                graphics.fillTriangle(0, -18, -9, -9, 9, -9);
+                graphics.fillTriangle(0, 18, -9, 9, 9, 9);
+                graphics.fillStyle(COLORS.paper, 0.85 * alpha);
+                graphics.fillRoundedRect(-1.5, -12, 3, 24, 1);
                 break;
             case 'burst':
-                graphics.lineStyle(4, COLORS.paper, 0.95);
-                graphics.strokeCircle(x, y, 11);
-                graphics.lineBetween(x - 15, y, x + 15, y);
-                graphics.lineBetween(x, y - 15, x, y + 15);
-                graphics.fillStyle(bright, 1);
-                graphics.fillCircle(x, y, 5);
+                graphics.lineStyle(4, COLORS.paper, 0.95 * alpha);
+                graphics.strokeCircle(0, 0, 11);
+                graphics.lineBetween(-15, 0, 15, 0);
+                graphics.lineBetween(0, -15, 0, 15);
+                graphics.fillStyle(bright, alpha);
+                graphics.fillCircle(0, 0, 5);
                 break;
             case 'color': {
                 const spectrum: readonly CircuitColor[] = [
@@ -817,64 +1399,94 @@ export class CircuitCrushScene extends Phaser.Scene {
                     'lime',
                     'violet'
                 ];
-                graphics.fillStyle(COLORS.paper, 0.96);
-                graphics.fillCircle(x, y, 15);
+                graphics.fillStyle(COLORS.paper, 0.96 * alpha);
+                graphics.fillCircle(0, 0, 15);
                 for (let dot = 0; dot < spectrum.length; dot++) {
                     const angle = -Math.PI / 2 + dot * Math.PI * 2 / spectrum.length;
-                    graphics.fillStyle(CHIP_COLORS[spectrum[dot]!], 1);
-                    graphics.fillCircle(
-                        x + Math.cos(angle) * 9,
-                        y + Math.sin(angle) * 9,
-                        4
-                    );
+                    graphics.fillStyle(CHIP_COLORS[spectrum[dot]!], alpha);
+                    graphics.fillCircle(Math.cos(angle) * 9, Math.sin(angle) * 9, 4);
                 }
-                graphics.fillStyle(0x07131c, 1);
-                graphics.fillCircle(x, y, 3);
+                graphics.fillStyle(0x07131c, alpha);
+                graphics.fillCircle(0, 0, 3);
                 break;
             }
         }
+
+        graphics.restore();
+
+        if (chip.shorted) {
+            this.drawShortEffect(graphics, x, y, scale, alpha, chip.id);
+        }
     }
 
-    private drawShortCircuit(
+    /**
+     * The sparking short rides its chip: the arcs are drawn at the chip's
+     * animated position, flickering to a new jagged shape every few frames.
+     */
+    private drawShortEffect(
         graphics: Phaser.GameObjects.Graphics,
         x: number,
         y: number,
-        centerX: number,
-        centerY: number,
-        pulse: number
+        scale: number,
+        alpha: number,
+        chipId: number
     ): void {
-        graphics.fillStyle(COLORS.dangerDark, 0.15 + pulse * 0.12);
-        graphics.fillRoundedRect(
-            x + 3,
-            y + 3,
-            CIRCUIT_TILE_SIZE - 6,
-            CIRCUIT_TILE_SIZE - 6,
-            8
-        );
-        graphics.lineStyle(3, COLORS.danger, 0.72 + pulse * 0.28);
-        graphics.strokeRoundedRect(
-            x + 4,
-            y + 4,
-            CIRCUIT_TILE_SIZE - 8,
-            CIRCUIT_TILE_SIZE - 8,
-            7
-        );
-        graphics.lineStyle(4, COLORS.warning, 1);
-        graphics.beginPath();
-        graphics.moveTo(centerX + 4, centerY - 22);
-        graphics.lineTo(centerX - 8, centerY - 5);
-        graphics.lineTo(centerX + 2, centerY - 4);
-        graphics.lineTo(centerX - 7, centerY + 20);
-        graphics.lineTo(centerX + 14, centerY - 6);
-        graphics.lineTo(centerX + 4, centerY - 6);
-        graphics.closePath();
-        graphics.strokePath();
+        const band = Math.floor(this.animationClockMs / 90);
+        const flicker = 0.55 + hash01(chipId, band) * 0.45;
+
+        graphics.save();
+        graphics.translateCanvas(x, y);
+        graphics.scaleCanvas(scale, scale);
+
+        graphics.fillStyle(COLORS.danger, 0.14 * flicker * alpha);
+        graphics.fillCircle(0, 0, 27);
+        graphics.lineStyle(3, COLORS.danger, (0.5 + 0.5 * flicker) * alpha);
+        graphics.strokeRoundedRect(-24, -24, 48, 48, 7);
+
+        // Two electric arcs crawl across the board, re-shaping every band.
+        for (let arc = 0; arc < 2; arc++) {
+            const seed = chipId * 7 + arc * 131;
+            const vertical = hash01(seed, band) < 0.5;
+            const points: Array<{x: number; y: number}> = [];
+            const segments = 4;
+            for (let step = 0; step <= segments; step++) {
+                const along = -22 + (44 * step) / segments;
+                const jitter = step === 0 || step === segments
+                    ? 0
+                    : (hash01(seed + step, band) - 0.5) * 26;
+                points.push(vertical
+                    ? {x: jitter, y: along}
+                    : {x: along, y: jitter});
+            }
+            graphics.lineStyle(3, COLORS.warning, 0.95 * flicker * alpha);
+            graphics.beginPath();
+            graphics.moveTo(points[0]!.x, points[0]!.y);
+            for (const point of points.slice(1)) graphics.lineTo(point.x, point.y);
+            graphics.strokePath();
+            graphics.lineStyle(1.2, 0xffffff, 0.9 * flicker * alpha);
+            graphics.beginPath();
+            graphics.moveTo(points[0]!.x, points[0]!.y);
+            for (const point of points.slice(1)) graphics.lineTo(point.x, point.y);
+            graphics.strokePath();
+        }
+
+        graphics.restore();
+
+        // The short spits the occasional stray spark from wherever it now sits.
+        const lastBand = this.shortSparkBands.get(chipId);
+        if (lastBand !== band) {
+            this.shortSparkBands.set(chipId, band);
+            if (hash01(chipId + 977, band) > 0.72) {
+                this.spawnSparkBurst(x, y - 10, COLORS.warning, 2);
+            }
+        }
     }
 
     private showHelp(): void {
         if (this.helpOpen || this.finishing) return;
         this.helpOpen = true;
         this.pulseTargeting = false;
+        this.hideBoosterTooltip();
         const depth = 100;
         const shade = this.add.rectangle(
             VIEW_SIZE / 2,
@@ -893,7 +1505,7 @@ export class CircuitCrushScene extends Phaser.Scene {
             0.99
         ).setStrokeStyle(4, COLORS.accent).setDepth(depth + 1)
             .setInteractive({useHandCursor: true});
-        const title = this.add.text(VIEW_SIZE / 2, 132, 'HOW TO CRUSH A CIRCUIT', {
+        const title = this.add.text(VIEW_SIZE / 2, 132, 'HOW TO CRASH A CIRCUIT', {
             color: '#72f4df',
             fontFamily: 'Georgia, serif',
             fontSize: '25px',

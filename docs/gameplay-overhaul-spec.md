@@ -12,12 +12,12 @@ This specification turns the current checkpoint into a replayable, single-player
 
 The eight-game campaign supersedes older references below to “four required objectives,” “six required objectives,” or a fixed sequential chain:
 
-- The required-objective registry is Pipe, Lock, Space, Platformer, Circuit Crush, Horsemaster, Zapper, and Casino Heist. Blackjack and Texas Hold’em remain optional service games and never count toward the exit.
+- The required-objective registry is Pipe, Lock, Space, Platformer, Circuit Crash, Horsemaster, Zapper, and Casino Heist. Blackjack and Texas Hold’em remain optional service games and never count toward the exit.
 - Levels 1–4 select four stable random objectives. Levels 5, 6, 7, and 8 select five, six, seven, and all eight respectively. Refreshing an unfinished level keeps its roster, placements, and encounter seeds stable.
 - The number required to unlock the exit equals the level number, capped at eight. Thus levels 1 through 8 require 1, 2, 3, 4, 5, 6, 7, and 8 completed selected games respectively. Once the threshold is met, any remaining games on levels 1–3 stay optional and playable.
 - Existing saves that already contain a four-, five-, or six-game roster are preserved without rerolling. A grandfathered save never requires more objectives than its persisted roster contains, preventing a migration deadlock.
 - Levels 1–7 retain the level-reward flow. Completing all eight objectives and entering the level-8 exit persists `campaign-victory`, never creates level 9, and presents a synthesized fanfare with a dancing-horse celebration.
-- Circuit Crush uses an 8×8, 18-move, seeded board with no starting matches, at least one legal swap, a replay-verified solvability certificate, blocker-clearing objectives, row/column/burst/color specials, and limited extra-move, hint, pulse, and shuffle boosters. Every retry derives a new seed and certified board.
+- Circuit Crash uses an 8×8, 18-move, seeded board with no starting matches, at least one legal swap, a replay-verified solvability certificate, blocker-clearing objectives, row/column/burst/color specials, and limited extra-move, hint, pulse, and shuffle boosters. Every retry derives a new seed and certified board.
 - Horsemaster uses a seeded fixed-step Frogger-style simulation on a 14×13 tile grid. The horse hops in four directions across five bicycle lanes to a safe median, then rides discrete machine slots (treadmill or exercise bike) on tiered traffic lanes — green buses are slow with two slots, yellow cars share bus speed with one slot, red cars are faster with one slot — where same-lane traffic never overlaps. Bicycle hits, missed landings, riding off the playfield edge, and wrong-building landings each cost one of three recoverable hearts; the finish is the seeded gym door among five buildings at the top.
 - Zapper is a seeded alien-laboratory service rush in which the player fills slime-powered blasters, slides them down nanotech counters, and catches the completed guns returning from alien technicians before handing them to waiting customers.
 - Casino Heist is a seeded highway escape that is visibly locked until the persistent Getaway Car has been acquired as rare maze loot or purchased for exactly `$100`. It starts the car unarmed, provides finite-ammo road weapon pickups, fields obstacles, spiked luxury cars, and forward-firing enemies, and awards exactly `$1000` on success.
@@ -45,7 +45,7 @@ The objective, reroll, icon, Space-upgrade, and Space-duration choices below wer
 - The original maze algorithm is preserved as `wilson-v1`: the existing loop-erased random-walk topology generator followed by the existing clustered wall-material assignment.
 - The selected roster is randomized and stable for the unfinished level. Every selected site is instantiated at level creation; any unavailable site appears visibly locked and states its unlock requirement. Casino Heist specifically requires the persistent Getaway Car unlock.
 - Objective sites are not generic collectible items. Health potions, mining picks, and future consumables remain a separate item system.
-- The Platformer landmark retains its elevator/lift icon; the expanded atlas adds distinct Circuit Crush, Horsemaster, Zapper, and Casino Heist silhouettes.
+- The Platformer landmark retains its elevator/lift icon; the expanded atlas adds distinct Circuit Crash, Horsemaster, Zapper, and Casino Heist silhouettes.
 - The maze becomes a deterministic roguelike combat layer using the existing item, monster, and material art banks. Persistent overworld gear is separate from run-scoped Space modules and attempt-scoped Platformer pickups.
 - Carried and equipped overworld items can supply modest passive modifiers to individual minigames without being consumed.
 - Maze defeat is a recoverable setback, not permadeath: the player always retains a basic attack and required progression, and recovery rules prevent a monster-induced loss spiral.
@@ -357,7 +357,7 @@ Create one typed registry containing the stable identity and presentation of eac
 | Lock / `lock` | `lock` | `archive-lock` | `archive-lock-opened` | None | Treasure chest with keyhole |
 | Space / `space` | `shooter` | `hangar-uplink` | `orbital-corridor-cleared` | None | Small side-view spaceship |
 | Platformer / `platformer` | `platformer` | `maintenance-elevator` | `sublevel-nine-stabilized` | None | Lift platform/elevator doors |
-| Circuit Crush / `circuit` | `circuit` | `circuit-crush-console` | `circuit-crush-completed` | None | Colored circuit chip |
+| Circuit Crash / `circuit` | `circuit` | `circuit-crush-console` | `circuit-crush-completed` | None | Colored circuit chip |
 | Horsemaster / `horsemaster` | `horsemaster` | `ultra-horse-crossing` | `ultra-horse-gym-reached` | None | Horse over a moving car |
 | Zapper / `zapper` | `zapper` | `nanotech-blaster-bench` | `zapper-shift-completed` | None | Slime-filled space blaster |
 | Casino Heist / `casino-heist` | `casino-heist` | `casino-getaway-route` | `casino-heist-completed` | Getaway Car acquired | Armored getaway car |
@@ -396,7 +396,7 @@ Recommended progression bands, measured from spawn as a percentage of the maximu
 - Lock: 35–70%;
 - Space: 50–85%;
 - Platformer: 65–100%.
-- Circuit Crush: 25–75%;
+- Circuit Crash: 25–75%;
 - Horsemaster: 45–100%;
 - Zapper: 30–80%;
 - Casino Heist: 55–100%.
@@ -883,7 +883,7 @@ At encounter launch, derive deterministic modifiers from positive-quantity backp
 | Lock | Lantern widens each tension band by 0.04; Compass delays the alarm by 15 seconds |
 | Space | Shield adds one flight shield charge; Bomb adds one mission bomb |
 | Platformer | Shield grants 10 seconds of starting protection; Ammo Bundle grants six starting shots |
-| Circuit Crush | Compass adds two Trace charges; Multitool adds one Pulse charge |
+| Circuit Crash | Compass adds two Trace charges; Multitool adds one Pulse charge |
 | Horsemaster | Map Scroll adds one recovery heart |
 | Zapper | Multitool fills blasters 25% faster; Lantern increases the returning-blaster catch tolerance |
 | Casino Heist | Shield adds one hull point; Compass improves high-speed handling by 15% |
@@ -1703,7 +1703,7 @@ Architecture requirements:
 - Size-5 material assignment with more material IDs than walls deterministically uses only the registry prefix that fits; the full production registry is exercised at playable sizes.
 - Every selected objective cell is unique, reachable, correctly spaced, and collision-free for roster sizes four through eight.
 - Pipe shortcut tests cover the preferred and relaxed path-reduction thresholds, mining protection, format-1 assignment, invalid native-save rejection, failure/abandon preservation, and atomic success transform + field clear + flag exactly once.
-- Objective icon registry maps Pipe → pipe, Lock → chest, Space → spaceship, Platformer → lift, Circuit Crush → circuit chip, Horsemaster → horse car, Zapper → slime blaster, and Casino Heist → getaway car.
+- Objective icon registry maps Pipe → pipe, Lock → chest, Space → spaceship, Platformer → lift, Circuit Crash → circuit chip, Horsemaster → horse car, Zapper → slime blaster, and Casino Heist → getaway car.
 - The objective atlas is exactly 256×32 RGBA with eight 32×32 frames, and a missing/invalid atlas produces the specified blocking error.
 - Migration-eligible, semantically valid format-1 saves migrate without losing progress; migration is idempotent and covers Pipe-complete and Pipe-incomplete cases.
 - Migration tests prove the current maze is never regenerated, current objective placement uses the preserved normalized legacy level seed, and future levels use the version-2 formula.
@@ -1907,7 +1907,7 @@ Run the quality gates with Node.js 22 LTS and npm available on `PATH`; the comma
 
 ### Milestone 6A: expanded eight-game roster
 
-- Add Circuit Crush, Horsemaster, Zapper, and Casino Heist as seeded fixed-rule models with keyboard/touch Phaser scenes.
+- Add Circuit Crash, Horsemaster, Zapper, and Casino Heist as seeded fixed-rule models with keyboard/touch Phaser scenes.
 - Add the rare Getaway Car pickup, exact `$100` shop offer, persistent unlock, forced-shop anti-deadlock rule, and atomic `$1000` Heist payout.
 - Add passive maze-item modifier derivation and visible bonus labels across all eight required minigames.
 - Scale stable objective selection and exit requirements through level 8 while preserving compatible four-, five-, and six-game saves.

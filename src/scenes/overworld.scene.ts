@@ -67,8 +67,8 @@ import {
     type HoldemLaunchData
 } from '../minigames/casino/holdem.scene';
 import {
-    CIRCUIT_CRUSH_SCENE_KEY,
-    type CircuitCrushLaunchData
+    CIRCUIT_CRASH_SCENE_KEY,
+    type CircuitCrashLaunchData
 } from '../minigames/circuit/circuit.scene';
 import {
     HORSEMASTER_SCENE_KEY,
@@ -78,7 +78,10 @@ import {
     CASINO_HEIST_SCENE_KEY,
     type CasinoHeistLaunchData
 } from '../minigames/heist/casino-heist.scene';
+import {selectLockFamily, type LockFamily} from '../minigames/lock/lock-model';
 import {LOCKPICK_SCENE_KEY, type LockpickLaunchData} from '../minigames/lock/lockpick.scene';
+import {SAFE_DIAL_SCENE_KEY} from '../minigames/lock/safe-dial.scene';
+import {TUMBLER_RELAY_SCENE_KEY} from '../minigames/lock/tumbler-relay.scene';
 import {PLATFORMER_SCENE_KEY, type PlatformerLaunchData} from '../minigames/platformer/platformer.scene';
 import {PIPE_DREAM_SCENE_KEY, type PipeDreamLaunchData} from '../minigames/pipe/pipe-dream.scene';
 import {SHOOTER_SCENE_KEY, type ShooterLaunchData} from '../minigames/shooter/shooter.scene';
@@ -1080,7 +1083,12 @@ export class OverworldScene extends Phaser.Scene {
             baseModifiers.benefitX = this.campaign.overworld.pipeShortcutWall.x;
             baseModifiers.benefitY = this.campaign.overworld.pipeShortcutWall.y;
         }
-        if (placement.objectiveId === 'lock') baseModifiers.lockFamily = 'pin-tension';
+        if (placement.objectiveId === 'lock') {
+            baseModifiers.lockFamily = selectLockFamily(
+                getCampaignLevelNumber(this.campaign),
+                record.attemptOrdinal
+            );
+        }
         if (placement.objectiveId === 'space') {
             baseModifiers.poweredShield = this.campaign.flags.includes('coolant-routing-restored');
             baseModifiers.archiveIntel = this.campaign.flags.includes('archive-lock-opened');
@@ -1142,19 +1150,30 @@ export class OverworldScene extends Phaser.Scene {
                 break;
             }
             case 'lock': {
+                const family = context.modifiers['lockFamily'] as LockFamily;
+                const tutorialFlag = family === 'safe-dial'
+                    ? 'tutorial-lock-dial-seen'
+                    : family === 'tumbler-relay'
+                        ? 'tutorial-lock-tumbler-seen'
+                        : 'tutorial-lock-seen';
                 const launch: LockpickLaunchData = {
                     context,
                     onComplete: complete,
                     onTutorialSeen: () => {
-                        if (this.campaign.flags.includes('tutorial-lock-seen')) return;
+                        if (this.campaign.flags.includes(tutorialFlag)) return;
                         this.campaign = {
                             ...this.campaign,
-                            flags: [...this.campaign.flags, 'tutorial-lock-seen']
+                            flags: [...this.campaign.flags, tutorialFlag]
                         };
                         this.emitState(messageEvent('Lock tutorial recorded.'));
                     }
                 };
-                this.scene.launch(LOCKPICK_SCENE_KEY, launch);
+                const sceneKey = family === 'safe-dial'
+                    ? SAFE_DIAL_SCENE_KEY
+                    : family === 'tumbler-relay'
+                        ? TUMBLER_RELAY_SCENE_KEY
+                        : LOCKPICK_SCENE_KEY;
+                this.scene.launch(sceneKey, launch);
                 break;
             }
             case 'space': {
@@ -1168,8 +1187,8 @@ export class OverworldScene extends Phaser.Scene {
                 break;
             }
             case 'circuit': {
-                const launch: CircuitCrushLaunchData = {context, onComplete: complete};
-                this.scene.launch(CIRCUIT_CRUSH_SCENE_KEY, launch);
+                const launch: CircuitCrashLaunchData = {context, onComplete: complete};
+                this.scene.launch(CIRCUIT_CRASH_SCENE_KEY, launch);
                 break;
             }
             case 'horsemaster': {

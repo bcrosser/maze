@@ -33,7 +33,8 @@ function backgroundChips(size = 8): CircuitChip[] {
             chips.push({
                 id: y * size + x + 10_000,
                 color: CIRCUIT_COLORS[(x + y * 2) % CIRCUIT_COLORS.length]!,
-                special: 'none'
+                special: 'none',
+                shorted: false
             });
         }
     }
@@ -55,12 +56,17 @@ function playableFixture(
     blockerIndices: readonly number[] = [chips.length - 1],
     movesRemaining = state.movesRemaining
 ): CircuitPuzzleState {
-    const blockers = chips.map(() => 0);
-    for (const index of blockerIndices) blockers[index] = 1;
+    // Shorts ride on chips, so the fixture attaches them to the chips at the
+    // requested cells and derives the overlay from those chips.
+    const shortedCells = new Set(blockerIndices);
+    const shortedChips = chips.map((chip, index) => ({
+        ...chip,
+        shorted: shortedCells.has(index)
+    }));
     return {
         ...state,
-        chips,
-        blockers,
+        chips: shortedChips,
+        blockers: shortedChips.map(chip => chip.shorted ? 1 : 0),
         blockersRemaining: blockerIndices.length,
         movesRemaining,
         terminalStatus: 'active',
@@ -79,19 +85,26 @@ function findSwapWithUnaffectedCell(
             swap.toIndex
         );
         const affected = new Set(probe.lastEvent.affectedIndices);
-        const unaffectedIndex = state.chips.findIndex((_, index) => !affected.has(index));
-        if (unaffectedIndex >= 0 && probe.lastEvent.affectedIndices[0] !== undefined) {
+        // Exclude the swap cells themselves: their chips change position, so
+        // a short marked there would ride away instead of staying put.
+        const unaffectedIndex = state.chips.findIndex((_, index) =>
+            !affected.has(index) && index !== swap.fromIndex && index !== swap.toIndex
+        );
+        const affectedIndex = probe.lastEvent.affectedIndices.find(index =>
+            index !== swap.fromIndex && index !== swap.toIndex
+        );
+        if (unaffectedIndex >= 0 && affectedIndex !== undefined) {
             return {
                 swap,
                 unaffectedIndex,
-                affectedIndex: probe.lastEvent.affectedIndices[0]
+                affectedIndex
             };
         }
     }
     throw new Error('Fixture did not contain a suitably local legal swap.');
 }
 
-describe('certified Circuit Crush generation', () => {
+describe('certified Circuit Crash generation', () => {
     it('reproduces every generated field for the same seed', () => {
         const first = create(12_345);
         const second = create(12_345);
@@ -319,6 +332,54 @@ describe('swaps, cascades, and move boundaries', () => {
         expect(won.blockersRemaining).toBe(0);
         expect(won.terminalStatus).toBe('success');
         expect(won.failureReason).toBeNull();
+    });
+});
+
+describe('chip-attached shorts', () => {
+    it('moves a short with its chip when the chip is swapped aside', () => {
+        const state = create(401);
+        const chips = backgroundChips();
+        const y = 3;
+        replaceChip(chips, y * 8, 'cyan');
+        replaceChip(chips, y * 8 + 1, 'cyan');
+        replaceChip(chips, y * 8 + 2, 'magenta');
+        replaceChip(chips, y * 8 + 3, 'cyan');
+        replaceChip(chips, (y + 1) * 8 + 2, 'cyan');
+        const shortedCell = y * 8 + 2;
+        const fixture = playableFixture(state, chips, [shortedCell]);
+
+        expect(getCircuitMatchedIndices(fixture)).toEqual([]);
+        const result = applyCircuitSwap(fixture, shortedCell, shortedCell + 8);
+
+        expect(result.lastEvent.kind).toBe('swap-resolved');
+        expect(result.lastEvent.blockersCleared).toBe(0);
+        expect(result.blockersRemaining).toBe(1);
+        expect(result.chips[shortedCell + 8]).toMatchObject({
+            color: 'magenta',
+            shorted: true
+        });
+        expect(result.blockers[shortedCell + 8]).toBe(1);
+        expect(result.blockers[shortedCell]).toBe(0);
+        expect(validateCircuitPuzzle(result).valid).toBe(true);
+    });
+
+    it('repairs a short exactly when its carrier chip leaves the board', () => {
+        const state = create(402);
+        const chips = backgroundChips();
+        const y = 3;
+        replaceChip(chips, y * 8, 'cyan');
+        replaceChip(chips, y * 8 + 1, 'cyan');
+        replaceChip(chips, y * 8 + 2, 'magenta');
+        replaceChip(chips, (y + 1) * 8 + 2, 'cyan');
+        const fixture = playableFixture(state, chips, [y * 8 + 1]);
+
+        expect(getCircuitMatchedIndices(fixture)).toEqual([]);
+        const result = applyCircuitSwap(fixture, y * 8 + 2, (y + 1) * 8 + 2);
+
+        expect(result.lastEvent.blockersCleared).toBe(1);
+        expect(result.blockersRemaining).toBe(0);
+        expect(result.terminalStatus).toBe('success');
+        expect(result.blockers.every(strength => strength === 0)).toBe(true);
     });
 });
 

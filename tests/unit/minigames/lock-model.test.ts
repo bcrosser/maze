@@ -13,6 +13,7 @@ import {
     releaseLockPick,
     resolveLockPuzzleConfig,
     scoreLock,
+    selectLockFamily,
     setLockPaused,
     setLockTension,
     turnLockCylinder,
@@ -174,6 +175,33 @@ describe('pin-tumbler lock generation', () => {
             difficulty: 'expert',
             levelTier: 5
         }).pinCount).toBe(6);
+    });
+
+    it('drifts every tension band dramatically between consecutive pins', () => {
+        for (let seed = 0; seed < 40; seed++) {
+            const lock = createLockPuzzle(
+                new Mulberry32Random(seed),
+                {difficulty: 'standard'}
+            );
+            for (let index = 1; index < lock.tensionBands.length; index++) {
+                const shift = Math.abs(
+                    lock.tensionBands[index]!.center - lock.tensionBands[index - 1]!.center
+                );
+                expect(shift).toBeGreaterThanOrEqual(0.09 - 1e-9);
+            }
+        }
+    });
+
+    it('rotates the lock family by level and retry, starting on pin-tension', () => {
+        expect(selectLockFamily(1, 0)).toBe('pin-tension');
+        expect(selectLockFamily(1, 1)).toBe('safe-dial');
+        expect(selectLockFamily(1, 2)).toBe('tumbler-relay');
+        expect(selectLockFamily(2, 0)).toBe('safe-dial');
+        expect(selectLockFamily(3, 0)).toBe('tumbler-relay');
+        expect(selectLockFamily(4, 0)).toBe('pin-tension');
+        expect(selectLockFamily(2, 2)).toBe('pin-tension');
+        expect(() => selectLockFamily(0, 0)).toThrow(/level number/);
+        expect(() => selectLockFamily(1, -1)).toThrow(/attempt ordinal/);
     });
 
     it('retains the family factory and compatibility factory contracts', () => {

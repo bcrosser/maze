@@ -1373,7 +1373,7 @@ test('Platformer generation produces a movable, jumpable combat level', async ({
     expect(Number(await canvas.getAttribute('data-platformer-health'))).toBeGreaterThan(0);
 });
 
-test('Circuit Crush rerolls retries and its certified touch route clears every short', async ({
+test('Circuit Crash rerolls retries and its certified touch route clears every short', async ({
     page
 }) => {
     await installSave(page, createObjectiveSave('circuit'));

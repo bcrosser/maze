@@ -82,7 +82,7 @@ export const OBJECTIVE_DEFINITIONS = Object.freeze([
     }),
     Object.freeze({
         id: 'circuit',
-        label: 'Circuit Crush',
+        label: 'Circuit Crash',
         kind: 'circuit',
         triggerId: 'circuit-crush-console',
         definitionId: 'circuit-crush',

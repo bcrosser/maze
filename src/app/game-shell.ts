@@ -211,7 +211,7 @@ export function updatePhaserEncounter(shell: GameShell, kind: GameActivityKind |
             lock: 'Lock picking game. Set the binding pins while maintaining safe tension.',
             shooter: 'Space combat game. Move freely, fire manually, use bombs, and defeat the Corridor Warden.',
             platformer: 'Platform game. Move, jump, collect every power core, fight enemies, and reach the lift.',
-            circuit: 'Circuit Crush match-three game. Swap adjacent circuit blocks, trigger special chips, and repair every shorted node before moves run out.',
+            circuit: 'Circuit Crash match-three game. Swap adjacent circuit boards, trigger special chips, and repair every sparking short before moves run out.',
             horsemaster: 'Horsemaster crossing game. Time the horse’s jumps between exercise machines mounted on moving cars and reach the Ultra Horse Gym.',
             zapper: 'Zapper nanotech lab game. Fill and slide slime-powered blasters to waiting aliens, then catch the completed weapons.',
             'casino-heist': 'Casino Heist driving game. Dodge road hazards, collect weapon modules and ammunition, and survive the getaway.',

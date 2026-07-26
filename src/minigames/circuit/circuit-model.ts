@@ -28,6 +28,11 @@ export interface CircuitChip {
     readonly id: number;
     readonly color: CircuitColor;
     readonly special: CircuitSpecial;
+    /**
+     * A sparking short rides on the chip itself: it moves when the chip is
+     * swapped or falls, and it is repaired when that chip leaves the board.
+     */
+    readonly shorted: boolean;
 }
 
 export interface CircuitSwap {
@@ -212,7 +217,7 @@ interface StableBoardResult extends ResolutionCursor {
 interface WitnessBuildResult extends ResolutionCursor {
     readonly finalChips: readonly CircuitChip[];
     readonly swaps: readonly CircuitSwap[];
-    readonly blockerIndices: readonly number[];
+    readonly blockerChipIds: readonly number[];
 }
 
 const DEFAULT_BOOSTER_CHARGES: CircuitBoosterCharges = Object.freeze({
@@ -250,7 +255,7 @@ function resolveConfig(config: CircuitPuzzleConfig): ResolvedCircuitPuzzleConfig
     };
 
     if (size !== 7 && size !== 8) {
-        throw new Error('Circuit Crush boards must be 7x7 or 8x8.');
+        throw new Error('Circuit Crash boards must be 7x7 or 8x8.');
     }
     if (!Number.isSafeInteger(witnessMoves) || witnessMoves < 3 || witnessMoves > 12) {
         throw new Error('Circuit witness length must be between 3 and 12 moves.');
@@ -307,11 +312,33 @@ class CircuitRandomCursor {
         const chip = {
             id: this.nextChipId,
             color: resolvedColor,
-            special
+            special,
+            shorted: false
         } satisfies CircuitChip;
         this.nextChipId += 1;
         return chip;
     }
+}
+
+function countShortedChips(chips: readonly CircuitChip[]): number {
+    return chips.reduce((total, chip) => total + (chip.shorted ? 1 : 0), 0);
+}
+
+function deriveBlockerOverlay(chips: readonly CircuitChip[]): readonly number[] {
+    return chips.map(chip => chip.shorted ? 1 : 0);
+}
+
+/**
+ * A full board reroute replaces every chip; the shorts survive it by staying
+ * at their cells, riding whichever new chip lands there.
+ */
+function transferShortsByCell(
+    previous: readonly CircuitChip[],
+    next: readonly CircuitChip[]
+): readonly CircuitChip[] {
+    return next.map((chip, index) =>
+        previous[index]?.shorted ? {...chip, shorted: true} : chip
+    );
 }
 
 function mixSeed(seed: number, salt: number): number {
@@ -545,7 +572,7 @@ function createStablePlayableBoard(
             };
         }
     }
-    throw new Error('Unable to generate a stable Circuit Crush board with a legal move.');
+    throw new Error('Unable to generate a stable Circuit Crash board with a legal move.');
 }
 
 function chooseCreationAnchor(
@@ -753,7 +780,7 @@ function resolveBoardAfterInitialCycle(
             width,
             height
         );
-        chips = stable.chips;
+        chips = transferShortsByCell(chips, stable.chips);
         cursor.state = stable.randomState;
         cursor.nextChipId = stable.nextChipId;
     }
@@ -766,7 +793,7 @@ function resolveBoardAfterInitialCycle(
             width,
             height
         );
-        chips = stable.chips;
+        chips = transferShortsByCell(chips, stable.chips);
         cursor.state = stable.randomState;
         cursor.nextChipId = stable.nextChipId;
         recoveredNoMoves = true;
@@ -887,21 +914,6 @@ function countRemainingBlockers(blockers: readonly number[]): number {
     return blockers.reduce((total, strength) => total + (strength > 0 ? 1 : 0), 0);
 }
 
-function clearAffectedBlockers(
-    blockers: readonly number[],
-    affectedIndices: readonly number[]
-): {readonly blockers: readonly number[]; readonly cleared: number} {
-    const next = [...blockers];
-    let cleared = 0;
-    for (const index of affectedIndices) {
-        if (next[index]! > 0) {
-            next[index] = Math.max(0, next[index]! - 1);
-            if (next[index] === 0) cleared += 1;
-        }
-    }
-    return {blockers: next, cleared};
-}
-
 function emptyEvent(kind: CircuitEventKind, message: string): CircuitModelEvent {
     return {
         kind,
@@ -939,21 +951,29 @@ function chooseWitnessCandidate(
     width: number,
     height: number,
     cursorState: ResolutionCursor,
-    previouslyAffected: ReadonlySet<number>,
+    initialChipIds: ReadonlySet<number>,
     tieSeed: number
-): {readonly swap: CircuitSwap; readonly resolution: BoardResolution; readonly newIndices: readonly number[]} | null {
+): {
+    readonly swap: CircuitSwap;
+    readonly resolution: BoardResolution;
+    readonly removedInitialIds: readonly number[];
+} | null {
     const candidates = getLegalSwapsOnBoard(chips, width, height)
         .map(swap => {
             const resolution = resolveSwapOnBoard(chips, width, height, swap, cursorState);
-            const newIndices = resolution.affectedIndices.filter(
-                index => !previouslyAffected.has(index)
-            );
-            return {swap, resolution, newIndices};
+            const survivorIds = new Set(resolution.chips.map(chip => chip.id));
+            // Shorts ride chips, so the witness must consume chips from the
+            // initial board: one per move becomes that move's short carrier.
+            const removedInitialIds = chips
+                .map(chip => chip.id)
+                .filter(id => initialChipIds.has(id) && !survivorIds.has(id));
+            return {swap, resolution, removedInitialIds};
         })
-        .filter(candidate => candidate.newIndices.length > 0)
+        .filter(candidate => candidate.removedInitialIds.length > 0)
         .sort((first, second) => {
-            const newDifference = second.newIndices.length - first.newIndices.length;
-            if (newDifference !== 0) return newDifference;
+            const removedDifference =
+                second.removedInitialIds.length - first.removedInitialIds.length;
+            if (removedDifference !== 0) return removedDifference;
             const cascadeDifference = second.resolution.cascades - first.resolution.cascades;
             if (cascadeDifference !== 0) return cascadeDifference;
             const firstRank = mixSeed(
@@ -980,8 +1000,8 @@ function buildWitness(
     let chips = initialChips;
     let cursorState = initialCursor;
     const swaps: CircuitSwap[] = [];
-    const blockerIndices: number[] = [];
-    const previouslyAffected = new Set<number>();
+    const blockerChipIds: number[] = [];
+    const initialChipIds = new Set(initialChips.map(chip => chip.id));
 
     for (let moveIndex = 0; moveIndex < moveCount; moveIndex++) {
         const candidate = chooseWitnessCandidate(
@@ -989,19 +1009,16 @@ function buildWitness(
             width,
             height,
             cursorState,
-            previouslyAffected,
+            initialChipIds,
             mixSeed(seed, moveIndex)
         );
         if (candidate === null) return null;
 
-        const sortedNewIndices = [...candidate.newIndices].sort(
+        const sortedRemovedIds = [...candidate.removedInitialIds].sort(
             (first, second) => mixSeed(seed ^ moveIndex, first)
                 - mixSeed(seed ^ moveIndex, second)
         );
-        blockerIndices.push(sortedNewIndices[0]!);
-        for (const index of candidate.resolution.affectedIndices) {
-            previouslyAffected.add(index);
-        }
+        blockerChipIds.push(sortedRemovedIds[0]!);
         swaps.push(candidate.swap);
         chips = candidate.resolution.chips;
         cursorState = {
@@ -1013,7 +1030,7 @@ function buildWitness(
     return {
         finalChips: chips,
         swaps,
-        blockerIndices,
+        blockerChipIds,
         ...cursorState
     };
 }
@@ -1061,7 +1078,7 @@ export function validateCircuitWitness(state: CircuitPuzzleState): CircuitWitnes
         finalSignature,
         message: valid
             ? `Certified in ${replay.movesSpent} moves.`
-            : 'Stored Circuit Crush witness did not reproduce its certified result.'
+            : 'Stored Circuit Crash witness did not reproduce its certified result.'
     };
 }
 
@@ -1101,8 +1118,11 @@ export function createCircuitPuzzle(
         );
         if (witness === null) continue;
 
-        const blockers = Array<number>(resolved.size * resolved.size).fill(0);
-        for (const index of witness.blockerIndices) blockers[index] = 1;
+        const shortedIds = new Set(witness.blockerChipIds);
+        const initialChips = stable.chips.map(chip =>
+            shortedIds.has(chip.id) ? {...chip, shorted: true} : chip
+        );
+        const blockers = deriveBlockerOverlay(initialChips);
         const emptyBlockers = blockers.map(() => 0);
         const certificate: CircuitSolvabilityCertificate = {
             swaps: witness.swaps,
@@ -1116,7 +1136,7 @@ export function createCircuitPuzzle(
             verified: false
         };
         const snapshot: CircuitInitialSnapshot = {
-            chips: stable.chips,
+            chips: initialChips,
             blockers,
             randomState: stable.randomState,
             nextChipId: stable.nextChipId
@@ -1125,9 +1145,9 @@ export function createCircuitPuzzle(
             config: resolved,
             width: resolved.size,
             height: resolved.size,
-            chips: stable.chips,
+            chips: initialChips,
             blockers,
-            blockersRemaining: witness.blockerIndices.length,
+            blockersRemaining: witness.blockerChipIds.length,
             movesRemaining: resolved.moveBudget,
             movesSpent: 0,
             score: 0,
@@ -1149,7 +1169,7 @@ export function createCircuitPuzzle(
             initialSnapshot: snapshot,
             lastEvent: emptyEvent(
                 'generated',
-                `CIRCUIT ONLINE · CLEAR ${witness.blockerIndices.length} SHORTS`
+                `CIRCUIT ONLINE · CLEAR ${witness.blockerChipIds.length} SHORTS`
             )
         };
         const validation = validateCircuitWitness(provisional);
@@ -1161,7 +1181,7 @@ export function createCircuitPuzzle(
     }
 
     throw new Error(
-        `Unable to certify a Circuit Crush board after ${resolved.maxGenerationAttempts} attempts.`
+        `Unable to certify a Circuit Crash board after ${resolved.maxGenerationAttempts} attempts.`
     );
 }
 
@@ -1196,8 +1216,11 @@ export function applyCircuitSwap(
         };
     }
 
-    const blockerResult = clearAffectedBlockers(state.blockers, resolution.affectedIndices);
-    const blockersRemaining = countRemainingBlockers(blockerResult.blockers);
+    // Shorts ride their chips, so a short is repaired exactly when its
+    // carrier chip is consumed by the resolution.
+    const blockersRemaining = countShortedChips(resolution.chips);
+    const blockersCleared = countShortedChips(state.chips) - blockersRemaining;
+    const blockers = deriveBlockerOverlay(resolution.chips);
     const movesRemaining = Math.max(0, state.movesRemaining - 1);
     const terminalStatus: CircuitTerminalStatus = blockersRemaining === 0
         ? 'success'
@@ -1212,7 +1235,7 @@ export function applyCircuitSwap(
             ? 'failure'
             : 'swap-resolved';
     const scoreGain = resolution.chipsRemoved * 25
-        + blockerResult.cleared * 250
+        + blockersCleared * 250
         + Math.max(0, resolution.cascades - 1) * 100
         + resolution.specialsCreated * 125
         + resolution.specialsActivated * 100;
@@ -1220,7 +1243,7 @@ export function applyCircuitSwap(
     return {
         ...state,
         chips: resolution.chips,
-        blockers: blockerResult.blockers,
+        blockers,
         blockersRemaining,
         movesRemaining,
         movesSpent: state.movesSpent + 1,
@@ -1240,7 +1263,7 @@ export function applyCircuitSwap(
             fromIndex,
             toIndex,
             affectedIndices: resolution.affectedIndices,
-            blockersCleared: blockerResult.cleared,
+            blockersCleared,
             cascades: resolution.cascades,
             specialsCreated: resolution.specialsCreated,
             specialKindsCreated: resolution.specialKindsCreated,
@@ -1252,8 +1275,8 @@ export function applyCircuitSwap(
                     ? 'OUT OF MOVES'
                     : resolution.recoveredNoMoves
                         ? 'NO SIGNAL PATHS · BOARD REROUTED'
-                        : blockerResult.cleared > 0
-                            ? `SHORT CIRCUITS -${blockerResult.cleared}`
+                        : blockersCleared > 0
+                            ? `SHORT CIRCUITS -${blockersCleared}`
                             : `CASCADE x${resolution.cascades}`
         }
     };
@@ -1267,15 +1290,10 @@ function projectHint(state: CircuitPuzzleState, swap: CircuitSwap): CircuitHint 
         swap,
         {randomState: state.randomState, nextChipId: state.nextChipId}
     );
-    const blockers = new Set(
-        state.blockers
-            .map((strength, index) => strength > 0 ? index : -1)
-            .filter(index => index >= 0)
-    );
     return {
         swap,
-        projectedBlockersCleared: resolution.affectedIndices
-            .filter(index => blockers.has(index)).length,
+        projectedBlockersCleared:
+            countShortedChips(state.chips) - countShortedChips(resolution.chips),
         projectedChipsCleared: resolution.chipsRemoved,
         projectedCascades: resolution.cascades,
         projectedSpecialsCreated: resolution.specialsCreated
@@ -1330,9 +1348,11 @@ function shuffledState(
         state.width,
         state.height
     );
+    const chips = transferShortsByCell(state.chips, stable.chips);
     return {
         ...state,
-        chips: stable.chips,
+        chips,
+        blockers: deriveBlockerOverlay(chips),
         randomState: stable.randomState,
         nextChipId: stable.nextChipId,
         noMoveRecoveries: state.noMoveRecoveries + (eventKind === 'no-move-shuffle' ? 1 : 0),
@@ -1425,18 +1445,18 @@ export function activateCircuitBooster(
         action.cellIndex,
         {randomState: state.randomState, nextChipId: state.nextChipId}
     );
-    const blockerResult = clearAffectedBlockers(state.blockers, resolution.affectedIndices);
-    const blockersRemaining = countRemainingBlockers(blockerResult.blockers);
+    const blockersRemaining = countShortedChips(resolution.chips);
+    const blockersCleared = countShortedChips(state.chips) - blockersRemaining;
     const terminalStatus: CircuitTerminalStatus =
         blockersRemaining === 0 ? 'success' : 'active';
     return {
         ...state,
         chips: resolution.chips,
-        blockers: blockerResult.blockers,
+        blockers: deriveBlockerOverlay(resolution.chips),
         blockersRemaining,
         score: state.score
             + resolution.chipsRemoved * 25
-            + blockerResult.cleared * 250
+            + blockersCleared * 250
             + resolution.specialsActivated * 100,
         totalCascades: state.totalCascades + resolution.cascades,
         totalChipsCleared: state.totalChipsCleared + resolution.chipsRemoved,
@@ -1454,7 +1474,7 @@ export function activateCircuitBooster(
             fromIndex: action.cellIndex,
             toIndex: null,
             affectedIndices: resolution.affectedIndices,
-            blockersCleared: blockerResult.cleared,
+            blockersCleared,
             cascades: resolution.cascades,
             specialsCreated: resolution.specialsCreated,
             specialKindsCreated: resolution.specialKindsCreated,
@@ -1462,7 +1482,7 @@ export function activateCircuitBooster(
             recoveredNoMoves: resolution.recoveredNoMoves,
             message: terminalStatus === 'success'
                 ? 'ALL SHORT CIRCUITS CLEARED'
-                : `TARGETED PULSE · SHORTS -${blockerResult.cleared}`
+                : `TARGETED PULSE · SHORTS -${blockersCleared}`
         }
     };
 }
@@ -1494,6 +1514,12 @@ export function validateCircuitPuzzle(state: CircuitPuzzleState): CircuitValidat
     }
     if (state.blockersRemaining !== countRemainingBlockers(state.blockers)) {
         reasons.push('Blocker telemetry does not match the blocker overlay.');
+    }
+    if (state.chips.length === expectedCellCount
+        && state.blockers.some(
+            (strength, index) => (strength > 0) !== state.chips[index]!.shorted
+        )) {
+        reasons.push('The blocker overlay must ride on the shorted chips.');
     }
     const automaticMatchCount = state.chips.length === expectedCellCount
         ? findMatchRuns(state.chips, state.width, state.height)

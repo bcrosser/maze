@@ -4,6 +4,25 @@ import type {DifficultyPreset} from '../../encounters/contracts';
 export const LOCK_LEVELS = [0, 1, 2, 3] as const;
 export type LockLevel = (typeof LOCK_LEVELS)[number];
 
+export const LOCK_FAMILIES = ['pin-tension', 'safe-dial', 'tumbler-relay'] as const;
+export type LockFamily = (typeof LOCK_FAMILIES)[number];
+
+/**
+ * Every lock marker on the minimap opens one of three lockpicking games. The
+ * rotation is deterministic: level one starts on the classic pin-tension lock,
+ * later levels start one game further along, and every retry advances the
+ * rotation so a failed attempt never replays the same mechanism back to back.
+ */
+export function selectLockFamily(levelNumber: number, attemptOrdinal: number): LockFamily {
+    if (!Number.isSafeInteger(levelNumber) || levelNumber < 1) {
+        throw new Error('Lock family level number must be a positive safe integer.');
+    }
+    if (!Number.isSafeInteger(attemptOrdinal) || attemptOrdinal < 0) {
+        throw new Error('Lock family attempt ordinal must be a non-negative safe integer.');
+    }
+    return LOCK_FAMILIES[(levelNumber - 1 + attemptOrdinal) % LOCK_FAMILIES.length]!;
+}
+
 export type LockFeedback =
     | 'idle'
     | 'springy'
@@ -208,7 +227,9 @@ function createTensionBands(
     let previousCenter = firstCenter;
 
     for (let index = 1; index < pinCount; index++) {
-        const magnitude = 0.025 + randomUnit(random) * 0.035;
+        // The sweet spot drifts by at least half the standard band width per
+        // pin, so a wrench parked in one place cannot set the whole stack.
+        const magnitude = 0.09 + randomUnit(random) * 0.13;
         let direction = randomUnit(random) < 0.5 ? -1 : 1;
         const halfWidth = width / 2;
         if (previousCenter + direction * magnitude < halfWidth ||

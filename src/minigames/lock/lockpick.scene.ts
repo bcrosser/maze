@@ -81,7 +81,7 @@ function feedbackText(feedback: LockFeedback): string {
         case 'jammed':
             return 'JAMMED — EASE OFF THE WRENCH';
         case 'set':
-            return 'SET — CLEAN CLICK';
+            return 'SET — CLEAN CLICK · THE WRENCH SWEET SPOT DRIFTED';
         case 'turn-ready':
             return 'ALL PINS SET — TURN THE CYLINDER';
         case 'set-all-pins-first':
@@ -746,7 +746,7 @@ export class LockpickScene extends Phaser.Scene {
         }).setOrigin(0.5).setDepth(depth + 2);
         const body = this.add.text(112, 202, [
             '1  Set the wrench inside the working band.',
-            '    The slider stays where you put it — one finger is enough.',
+            '    The sweet spot DRIFTS after every set pin — re-seat it.',
             '',
             '2  Follow the gold NEXT marker.',
             '    The binding pin trembles and is selected automatically.',
