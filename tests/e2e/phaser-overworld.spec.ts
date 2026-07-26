@@ -1439,7 +1439,7 @@ test('maze items pass a visible mechanical bonus into a minigame without being c
     expect(during.player.backpack.some(item => item.baseTypeId === 'compass')).toBe(true);
 });
 
-test('Horsemaster generates a fresh traffic course and accepts touch alignment and jumps', async ({
+test('Horsemaster generates a fresh Frogger course and accepts touch hops in four directions', async ({
     page
 }) => {
     await installSave(page, createObjectiveSave('horsemaster'));
@@ -1449,10 +1449,15 @@ test('Horsemaster generates a fresh traffic course and accepts touch alignment a
     await expect(gameMain).toHaveAttribute('data-encounter', 'horsemaster');
     await expect(canvas).toHaveAttribute('data-horsemaster-status', 'active');
     await expect(canvas).toHaveAttribute('data-horsemaster-help-open', 'true');
-    expect(Number(await canvas.getAttribute('data-horsemaster-lane-count')))
-        .toBeGreaterThanOrEqual(5);
+    expect(Number(await canvas.getAttribute('data-horsemaster-lane-count'))).toBe(10);
+    expect(Number(await canvas.getAttribute('data-horsemaster-row-count'))).toBe(13);
     expect(Number(await canvas.getAttribute('data-horsemaster-vehicle-count')))
         .toBeGreaterThanOrEqual(10);
+    expect(Number(await canvas.getAttribute('data-horsemaster-bicycle-count')))
+        .toBeGreaterThanOrEqual(5);
+    const gymBuilding = Number(await canvas.getAttribute('data-horsemaster-gym-building'));
+    expect(gymBuilding).toBeGreaterThanOrEqual(0);
+    expect(gymBuilding).toBeLessThanOrEqual(4);
     await tapGamePoint(page, 336, 484);
     await expect(canvas).toHaveAttribute('data-horsemaster-help-open', 'false');
 
@@ -1470,13 +1475,14 @@ test('Horsemaster generates a fresh traffic course and accepts touch alignment a
     await expect.poll(async () => Number(
         await canvas.getAttribute('data-horsemaster-x')
     )).not.toBe(startingX);
-    const startingLane = Number(await canvas.getAttribute('data-horsemaster-lane'));
+    await expect(canvas).toHaveAttribute('data-horsemaster-hopping', 'false');
+    const startingRow = Number(await canvas.getAttribute('data-horsemaster-row'));
     const startingLives = Number(await canvas.getAttribute('data-horsemaster-lives'));
     await tapGamePoint(page, 556, 619);
     await expect.poll(async () => {
-        const lane = Number(await canvas.getAttribute('data-horsemaster-lane'));
+        const row = Number(await canvas.getAttribute('data-horsemaster-row'));
         const lives = Number(await canvas.getAttribute('data-horsemaster-lives'));
-        return lane !== startingLane || lives !== startingLives;
+        return row !== startingRow || lives !== startingLives;
     }, {timeout: 2_000}).toBe(true);
 });
 
