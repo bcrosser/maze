@@ -11,6 +11,7 @@ import {
     getEncounterNumberModifier
 } from '../item-bonus';
 import {
+    HORSEMASTER_CAB_LENGTH,
     HORSEMASTER_FIXED_STEP_MS,
     HORSEMASTER_GOAL_ROW,
     HORSEMASTER_ROW_COUNT,
@@ -356,11 +357,12 @@ export class HorsemasterScene extends Phaser.Scene {
         }).setOrigin(0.5).setDepth(101);
         const body = this.add.text(VIEW_SIZE / 2, 332,
             'ARROWS / WASD hop one tile. SPACE also hops forward.\n\n' +
-            'Cross the bike road on hoof and dodge the bicycles. ' +
-            'The median is safe ground.\n\n' +
-            'On the far road you must RIDE: land on a treadmill or exercise ' +
-            'bike. GREEN buses are slow with TWO slots, YELLOW cars have one, ' +
-            'RED cars are faster. Ride off the screen edge and you lose a heart.\n\n' +
+            'Cross the bike road on hoof: rider colors show speed — GREEN is ' +
+            'slow, YELLOW quicker, RED fastest. The median is safe ground.\n\n' +
+            'On the far road you must RIDE: leap onto any truck and the horse ' +
+            'settles onto the nearest machine in its bed. GREEN flatbeds are ' +
+            'slow with TWO machines, YELLOW pickups carry one, RED pickups are ' +
+            'fast. Ride off the screen edge and you lose a heart.\n\n' +
             'Finish through the glowing door of the one true GYM.',
             {
                 color: '#fff7df',
@@ -412,7 +414,7 @@ export class HorsemasterScene extends Phaser.Scene {
                     this.messageText.setText(
                         event.targetRow >= HORSEMASTER_GOAL_ROW
                             ? 'FINAL LEAP · AIM FOR THE GYM DOOR'
-                            : 'AIRBORNE · LAND ON A MACHINE'
+                            : 'AIRBORNE · LAND ON A TRUCK'
                     );
                     break;
                 case 'landed': {
@@ -429,7 +431,7 @@ export class HorsemasterScene extends Phaser.Scene {
                 }
                 case 'road-impact':
                     this.messageText.setText(
-                        this.heartsMessage('NO MACHINE UNDER HOOF', event.lives)
+                        this.heartsMessage('MISSED THE TRUCK', event.lives)
                     );
                     break;
                 case 'bicycle-hit':
@@ -539,7 +541,11 @@ export class HorsemasterScene extends Phaser.Scene {
                 }
             }
         }
-        for (const lane of this.state.course.vehicleLanes) {
+        const tintedLanes = [
+            ...this.state.course.bikeLanes,
+            ...this.state.course.vehicleLanes
+        ];
+        for (const lane of tintedLanes) {
             graphics.fillStyle(tierColor(lane.tier), 0.55);
             for (let x = 8; x < VIEW_SIZE; x += 96) {
                 graphics.fillRect(x, lane.y + HORSEMASTER_TILE / 2 - 8, 24, 4);
@@ -614,7 +620,10 @@ export class HorsemasterScene extends Phaser.Scene {
         const x = bicycle.x;
         const y = bicycle.y;
         const dx = (offset: number): number => x + offset * direction;
-        const jersey = CAR_COLORS[bicycle.definition.colorIndex % CAR_COLORS.length]!;
+        // Riders wear their lane's speed color: green slow, yellow medium, red fast.
+        const jersey = tierColor(
+            this.state.course.bikeLanes[bicycle.definition.laneIndex]!.tier
+        );
         const spin = this.animationClockMs / 120 + bicycle.definition.colorIndex * 0.9;
 
         graphics.fillStyle(COLORS.ink, 0.25);
@@ -662,46 +671,87 @@ export class HorsemasterScene extends Phaser.Scene {
         );
         graphics.fillStyle(COLORS.rider);
         graphics.fillCircle(dx(5), y - 17, 4);
-        graphics.fillStyle(COLORS.ink);
+        graphics.fillStyle(jersey);
         graphics.fillRect(dx(5) - 4, y - 22, 8, 3);
         graphics.fillStyle(COLORS.ink, 0.3);
         graphics.fillRect(dx(-22), y + 4, 6, 2);
         graphics.fillRect(dx(-28), y + 9, 5, 2);
     }
 
+    /**
+     * Every vehicle is a flatbed truck: a driver's cab on the leading side
+     * and the exercise machines riding in the open bed behind it.
+     */
     private drawVehicle(
         graphics: Phaser.GameObjects.Graphics,
         vehicle: HorsemasterRenderVehicle,
         snapshot: HorsemasterRenderSnapshot
     ): void {
         const definition = vehicle.definition;
-        const isBus = definition.tier === 'green';
-        const bodyColor = isBus
+        const isBig = definition.tier === 'green';
+        const bodyColor = isBig
             ? BUS_COLORS[definition.colorIndex % BUS_COLORS.length]!
             : CAR_COLORS[definition.colorIndex % CAR_COLORS.length]!;
         const halfWidth = definition.carWidth / 2;
+        const direction = definition.direction;
         const x = vehicle.x;
         const y = vehicle.y;
         const slotSpan = definition.slots.length * HORSEMASTER_SLOT_WIDTH;
+        const cabLeft = direction === 1
+            ? x + halfWidth
+            : x - halfWidth - HORSEMASTER_CAB_LENGTH;
 
+        const shadowLeft = direction === 1
+            ? x - halfWidth - 2
+            : x - halfWidth - HORSEMASTER_CAB_LENGTH - 2;
         graphics.fillStyle(COLORS.ink, 0.4);
-        graphics.fillRoundedRect(x - halfWidth - 2, y + 2, definition.carWidth + 4, 22, 7);
+        graphics.fillRoundedRect(
+            shadowLeft,
+            y + 2,
+            definition.carWidth + HORSEMASTER_CAB_LENGTH + 4,
+            22,
+            7
+        );
+        const wheelXs = isBig
+            ? [x - halfWidth * 0.65, x + halfWidth * 0.1, x + halfWidth * 0.7]
+            : [x - halfWidth * 0.5, x + halfWidth * 0.55];
+        wheelXs.push(x + direction * (halfWidth + HORSEMASTER_CAB_LENGTH * 0.55));
         graphics.fillStyle(COLORS.ink);
-        const wheelOffsets = isBus ? [-0.65, 0, 0.65] : [-0.55, 0.55];
-        for (const offset of wheelOffsets) {
-            graphics.fillCircle(x + halfWidth * offset, y + 22, 6);
-        }
+        for (const wheelX of wheelXs) graphics.fillCircle(wheelX, y + 22, 6);
         graphics.fillStyle(0xb8bdc7);
-        for (const offset of wheelOffsets) {
-            graphics.fillCircle(x + halfWidth * offset, y + 22, 2.5);
-        }
+        for (const wheelX of wheelXs) graphics.fillCircle(wheelX, y + 22, 2.5);
+
+        // Flatbed chassis in the truck's paint color, with a darker bed floor.
         graphics.fillStyle(bodyColor);
-        graphics.fillRoundedRect(x - halfWidth, y + 2, definition.carWidth, 20, 6);
+        graphics.fillRoundedRect(x - halfWidth, y + 6, definition.carWidth, 16, 4);
+        graphics.fillStyle(COLORS.belt);
+        graphics.fillRoundedRect(x - halfWidth + 2, y + 2, definition.carWidth - 4, 8, 3);
+
+        // Driver's cab, taller than the bed, on the leading side.
+        graphics.fillStyle(bodyColor);
+        graphics.fillRoundedRect(cabLeft, y - 12, HORSEMASTER_CAB_LENGTH, 34, 5);
+        graphics.fillStyle(COLORS.ink, 0.35);
+        graphics.fillRect(cabLeft + 2, y - 12, HORSEMASTER_CAB_LENGTH - 4, 3);
         graphics.fillStyle(0xbfe7ef);
-        const windshieldX = definition.direction > 0
-            ? x + halfWidth - 18
-            : x - halfWidth + 5;
-        graphics.fillRoundedRect(windshieldX, y + 5, 13, 9, 2);
+        const windshieldX = direction === 1
+            ? cabLeft + HORSEMASTER_CAB_LENGTH - 8
+            : cabLeft + 2;
+        graphics.fillRoundedRect(windshieldX, y - 8, 6, 12, 2);
+        graphics.fillRoundedRect(
+            cabLeft + (direction === 1 ? 3 : 9),
+            y - 8,
+            14,
+            11,
+            2
+        );
+        // The driver: head, cap, and a hand on the wheel.
+        const driverX = cabLeft + HORSEMASTER_CAB_LENGTH / 2 + (direction === 1 ? -2 : 2);
+        graphics.fillStyle(COLORS.rider);
+        graphics.fillCircle(driverX, y - 3, 3.5);
+        graphics.fillStyle(COLORS.ink);
+        graphics.fillRect(driverX - 4, y - 8, 8, 3);
+        graphics.lineStyle(2, COLORS.rider, 1);
+        graphics.lineBetween(driverX + direction * 3, y - 1, driverX + direction * 7, y + 1);
 
         graphics.fillStyle(COLORS.deck);
         graphics.fillRoundedRect(x - slotSpan / 2 - 4, y - 16, slotSpan + 8, 22, 4);

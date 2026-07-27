@@ -21,7 +21,12 @@ export const HORSEMASTER_TRAFFIC_MIN_X = -96;
 export const HORSEMASTER_TRAFFIC_MAX_X = HORSEMASTER_WORLD_WIDTH + 96;
 export const HORSEMASTER_HORSE_HALF_WIDTH = 13;
 export const HORSEMASTER_SLOT_WIDTH = 48;
+/** Retained for reference: landings now accept the whole truck, not a slot. */
 export const HORSEMASTER_LANDING_TOLERANCE = 12;
+/** The driver's cab extends this far beyond the bed on the leading side. */
+export const HORSEMASTER_CAB_LENGTH = 26;
+/** A landing sticks when at least this much of the horse overlaps the truck. */
+export const HORSEMASTER_LANDING_OVERLAP_RATIO = 0.8;
 export const HORSEMASTER_DOOR_HALF_WIDTH = 24;
 export const HORSEMASTER_EDGE_DEATH_MARGIN = 12;
 export const HORSEMASTER_BIKE_HIT_TOLERANCE = 26;
@@ -95,6 +100,8 @@ export interface HorsemasterBikeLane {
     readonly index: number;
     readonly row: number;
     readonly y: number;
+    /** Speed tier; bikes render in this color so speed reads at a glance. */
+    readonly tier: HorsemasterVehicleTier;
     readonly direction: -1 | 1;
     readonly speed: number;
     readonly bicycles: readonly HorsemasterBicycleDefinition[];
@@ -312,16 +319,25 @@ const EXERCISE_KINDS: readonly HorsemasterExerciseKind[] = Object.freeze([
 ]);
 
 /**
- * Allowed (green, yellow, red) lane counts: green always strictly dominates
- * and red is rarest. With five lanes, green > yellow > red >= 1 is impossible
- * (it needs six), so the red-bearing composition ties yellow and red at one.
+ * Every level fields exactly three green lanes, one yellow, and one red, so
+ * a fast Frogger lane always appears while green stays dominant.
  */
-const TIER_COMPOSITIONS: readonly (readonly [number, number, number])[] =
-    Object.freeze([
-        [3, 1, 1],
-        [3, 2, 0],
-        [4, 1, 0]
-    ] as const);
+const VEHICLE_TIER_POOL: readonly HorsemasterVehicleTier[] = Object.freeze([
+    'green',
+    'green',
+    'green',
+    'yellow',
+    'red'
+]);
+
+/** Bike lanes mirror the same mix: three slow, one medium, one fast. */
+const BIKE_TIER_POOL: readonly HorsemasterVehicleTier[] = Object.freeze([
+    'green',
+    'green',
+    'green',
+    'yellow',
+    'red'
+]);
 
 function clamp(value: number, minimum: number, maximum: number): number {
     return Math.max(minimum, Math.min(maximum, value));
@@ -384,16 +400,10 @@ function assertGenerationConfig(config: HorsemasterGenerationConfig): void {
 }
 
 function drawLaneTiers(random: RandomSource): HorsemasterVehicleTier[] {
-    const [green, yellow, red] = chooseRandom(TIER_COMPOSITIONS, random);
-    const pool: HorsemasterVehicleTier[] = [
-        ...Array.from({length: green}, () => 'green' as const),
-        ...Array.from({length: yellow}, () => 'yellow' as const),
-        ...Array.from({length: red}, () => 'red' as const)
-    ];
-    const tiers = [...shuffle(pool, random)];
+    const tiers = [...shuffle(VEHICLE_TIER_POOL, random)];
     // The first jump off the median and the gym-timing lane are never the
-    // fast lane. Compositions carry at most one red lane and at least two
-    // green lanes, so a middle-lane green donor always exists.
+    // fast lane. The pool carries exactly one red lane and three green
+    // lanes, so a middle-lane green donor always exists.
     for (const guarded of [0, VEHICLE_LANE_COUNT - 1]) {
         if (tiers[guarded] !== 'red') continue;
         const donor = tiers.findIndex(
@@ -412,6 +422,18 @@ function laneSpeed(tier: HorsemasterVehicleTier, random: RandomSource): number {
     return tier === 'red'
         ? 74 + randomInteger(random, 13)
         : 50 + randomInteger(random, 11);
+}
+
+/** Bike speed bands: color always tells the horse how fast a lane flows. */
+function bikeLaneSpeed(tier: HorsemasterVehicleTier, random: RandomSource): number {
+    switch (tier) {
+        case 'green':
+            return 22 + randomInteger(random, 7);
+        case 'yellow':
+            return 38 + randomInteger(random, 7);
+        case 'red':
+            return 58 + randomInteger(random, 9);
+    }
 }
 
 export function createHorsemasterCourse(
@@ -471,12 +493,14 @@ export function createHorsemasterCourse(
     }
 
     const bikeFirstDirection: -1 | 1 = randomInteger(random, 2) === 0 ? -1 : 1;
+    const bikeTiers = shuffle(BIKE_TIER_POOL, random);
     const bikeLanes: HorsemasterBikeLane[] = [];
     for (let laneIndex = 0; laneIndex < BIKE_LANE_COUNT; laneIndex++) {
         const direction: -1 | 1 = laneIndex % 2 === 0
             ? bikeFirstDirection
             : bikeFirstDirection === 1 ? -1 : 1;
-        const speed = 24 + 4 * laneIndex + randomInteger(random, 5);
+        const tier = bikeTiers[laneIndex]!;
+        const speed = bikeLaneSpeed(tier, random);
         const spacing = trafficSpan() / 3;
         const phase = random.next() * spacing;
         const bicycles: HorsemasterBicycleDefinition[] = [];
@@ -497,6 +521,7 @@ export function createHorsemasterCourse(
             index: laneIndex,
             row: 1 + laneIndex,
             y: horsemasterRowY(1 + laneIndex),
+            tier,
             direction,
             speed,
             bicycles
@@ -559,7 +584,7 @@ export function canonicalHorsemasterCourseSignature(course: HorsemasterCourse): 
         ).join('|')}`
     );
     const bikeLanes = course.bikeLanes.map(lane =>
-        `B${lane.index}:${lane.direction},${lane.speed}:${lane.bicycles.map(bicycle =>
+        `B${lane.index}:${lane.tier},${lane.direction},${lane.speed}:${lane.bicycles.map(bicycle =>
             `${bicycle.initialX.toFixed(3)},${bicycle.colorIndex}`
         ).join('|')}`
     );
@@ -647,7 +672,7 @@ export function hasHorsemasterWaitTimingRoute(course: HorsemasterCourse): boolea
     }
     if (course.bikeLanes.length !== BIKE_LANE_COUNT) return false;
     for (const lane of course.bikeLanes) {
-        if (lane.speed < 20 || lane.speed > 48) return false;
+        if (lane.speed < 20 || lane.speed > 70) return false;
         const gaps = circularEdgeGaps(lane.bicycles.map(bicycle => ({
             centerX: bicycle.initialX,
             width: BIKE_LENGTH
@@ -717,11 +742,8 @@ export function validateHorsemasterCourse(
     else {
         const tierCount = (tier: HorsemasterVehicleTier): number =>
             course.vehicleLanes.filter(lane => lane.tier === tier).length;
-        const green = tierCount('green');
-        const yellow = tierCount('yellow');
-        const red = tierCount('red');
-        if (!(green > yellow && yellow >= red && green >= 3 && red <= 1)) {
-            errors.push('Lane tiers must favor green over yellow over red.');
+        if (tierCount('green') !== 3 || tierCount('yellow') !== 1 || tierCount('red') !== 1) {
+            errors.push('Vehicle lanes must be exactly three green, one yellow, one red.');
         }
         if (
             course.vehicleLanes[0]!.tier === 'red' ||
@@ -801,6 +823,17 @@ export function validateHorsemasterCourse(
     if (course.bikeLanes.length !== BIKE_LANE_COUNT) {
         errors.push('Course must contain exactly five bike lanes.');
     }
+    else {
+        const bikeTierCount = (tier: HorsemasterVehicleTier): number =>
+            course.bikeLanes.filter(lane => lane.tier === tier).length;
+        if (
+            bikeTierCount('green') !== 3 ||
+            bikeTierCount('yellow') !== 1 ||
+            bikeTierCount('red') !== 1
+        ) {
+            errors.push('Bike lanes must be exactly three green, one yellow, one red.');
+        }
+    }
     const bicycleIds = new Set<string>();
     course.bikeLanes.forEach((lane, laneIndex) => {
         if (
@@ -813,8 +846,13 @@ export function validateHorsemasterCourse(
         if (laneIndex > 0 && course.bikeLanes[laneIndex - 1]!.direction === lane.direction) {
             errors.push(`Bike lane ${laneIndex} does not alternate direction.`);
         }
-        if (lane.speed < 20 || lane.speed > 48) {
-            errors.push(`Bike lane ${laneIndex} speed is out of band.`);
+        const bikeSpeedValid = lane.tier === 'green'
+            ? lane.speed >= 22 && lane.speed <= 28
+            : lane.tier === 'yellow'
+                ? lane.speed >= 38 && lane.speed <= 44
+                : lane.speed >= 58 && lane.speed <= 66;
+        if (!bikeSpeedValid) {
+            errors.push(`Bike lane ${laneIndex} speed does not match its tier.`);
         }
         if (lane.bicycles.length < 2) {
             errors.push(`Bike lane ${laneIndex} has too few bicycles.`);
@@ -1090,6 +1128,12 @@ function applyHorizontalInput(
     startHop(state, events, 'grid', horsemasterColumnX(targetColumn), player.row);
 }
 
+/**
+ * A landing counts when at least 80% of the horse overlaps the truck —
+ * cab included — and the horse then settles onto the closest machine slot.
+ * Trucks never sit close enough for a horse to qualify on two at once, so
+ * the best-overlap pick is unambiguous.
+ */
 function resolveSlotLanding(
     state: MutableHorsemasterState,
     targetRow: number,
@@ -1101,18 +1145,29 @@ function resolveSlotLanding(
         loseHeart(state, events, 'road-impact');
         return;
     }
+    const requiredOverlap =
+        HORSEMASTER_LANDING_OVERLAP_RATIO * HORSEMASTER_HORSE_HALF_WIDTH * 2;
     const candidates = lane.vehicles.flatMap(definition => {
         const vehicle = state.vehicles.find(candidate => candidate.id === definition.id);
         if (vehicle === undefined) return [];
-        return definition.slots.flatMap(slot => {
+        const left = vehicle.x -
+            definition.carWidth / 2 -
+            (definition.direction === -1 ? HORSEMASTER_CAB_LENGTH : 0);
+        const right = vehicle.x +
+            definition.carWidth / 2 +
+            (definition.direction === 1 ? HORSEMASTER_CAB_LENGTH : 0);
+        const overlap =
+            Math.min(right, player.x + HORSEMASTER_HORSE_HALF_WIDTH) -
+            Math.max(left, player.x - HORSEMASTER_HORSE_HALF_WIDTH);
+        if (overlap < requiredOverlap) return [];
+        return definition.slots.map(slot => {
             const center = vehicle.x + slot.offsetX;
-            const distance = Math.abs(player.x - center);
-            return distance <= HORSEMASTER_LANDING_TOLERANCE
-                ? [{definition, slot, center, distance}]
-                : [];
+            return {definition, slot, center, distance: Math.abs(player.x - center), overlap};
         });
     }).sort((left, right) =>
-        left.distance - right.distance || left.slot.index - right.slot.index
+        right.overlap - left.overlap ||
+        left.distance - right.distance ||
+        left.slot.index - right.slot.index
     );
     const closest = candidates[0];
     if (closest === undefined) {

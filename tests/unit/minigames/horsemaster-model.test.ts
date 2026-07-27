@@ -354,22 +354,15 @@ describe('Horsemaster course generation', () => {
         expect(gymIndexes.size).toBeGreaterThanOrEqual(3);
     });
 
-    it('tiers lanes green over yellow over red with tiered speeds and slots', () => {
-        const compositions = new Set<string>();
+    it('always fields three green, one yellow, and one red vehicle lane', () => {
         for (let seed = 0; seed < 200; seed++) {
             const course = createHorsemasterCourse(new Mulberry32Random(seed * 97 + 3));
             const count = (tier: string): number =>
                 course.vehicleLanes.filter(lane => lane.tier === tier).length;
-            const green = count('green');
-            const yellow = count('yellow');
-            const red = count('red');
-            compositions.add(`${green}-${yellow}-${red}`);
 
-            expect(green + yellow + red).toBe(5);
-            expect(green).toBeGreaterThan(yellow);
-            expect(yellow).toBeGreaterThanOrEqual(red);
-            expect(green).toBeGreaterThanOrEqual(3);
-            expect(red).toBeLessThanOrEqual(1);
+            expect(count('green')).toBe(3);
+            expect(count('yellow')).toBe(1);
+            expect(count('red')).toBe(1);
             expect(course.vehicleLanes[0]!.tier).not.toBe('red');
             expect(course.vehicleLanes[4]!.tier).not.toBe('red');
 
@@ -398,19 +391,31 @@ describe('Horsemaster course generation', () => {
                 }
             }
         }
-        expect(compositions).toEqual(new Set(['3-1-1', '3-2-0', '4-1-0']));
     });
 
-    it('keeps bicycles slow, sparse, and alternating with non-decreasing lane speeds', () => {
+    it('tiers bike lanes three green, one yellow, one red with speed-matched colors', () => {
         for (let seed = 0; seed < 100; seed++) {
             const course = createHorsemasterCourse(new Mulberry32Random(seed * 53 + 11));
+            const count = (tier: string): number =>
+                course.bikeLanes.filter(lane => lane.tier === tier).length;
+            expect(count('green')).toBe(3);
+            expect(count('yellow')).toBe(1);
+            expect(count('red')).toBe(1);
             for (let index = 0; index < course.bikeLanes.length; index++) {
                 const lane = course.bikeLanes[index]!;
-                expect(lane.speed).toBeGreaterThanOrEqual(20);
-                expect(lane.speed).toBeLessThanOrEqual(48);
+                if (lane.tier === 'green') {
+                    expect(lane.speed).toBeGreaterThanOrEqual(22);
+                    expect(lane.speed).toBeLessThanOrEqual(28);
+                }
+                else if (lane.tier === 'yellow') {
+                    expect(lane.speed).toBeGreaterThanOrEqual(38);
+                    expect(lane.speed).toBeLessThanOrEqual(44);
+                }
+                else {
+                    expect(lane.speed).toBeGreaterThanOrEqual(58);
+                    expect(lane.speed).toBeLessThanOrEqual(66);
+                }
                 if (index > 0) {
-                    expect(lane.speed)
-                        .toBeGreaterThanOrEqual(course.bikeLanes[index - 1]!.speed);
                     expect(lane.direction)
                         .toBe(-course.bikeLanes[index - 1]!.direction);
                 }
@@ -648,6 +653,85 @@ describe('Horsemaster traffic and movement', () => {
         expect(missed.state.player.recoveryMs).toBe(HORSEMASTER_RECOVERY_MS);
         expect(missed.events.map(event => event.kind))
             .toEqual(expect.arrayContaining(['road-impact', 'reset']));
+    });
+
+    it('lands mid-truck and settles the horse onto the nearest machine', () => {
+        // Find a course whose first vehicle lane is a two-slot green flatbed.
+        let course = createHorsemasterCourse(new Mulberry32Random(1));
+        for (let seed = 2; course.vehicleLanes[0]!.tier !== 'green'; seed++) {
+            course = createHorsemasterCourse(new Mulberry32Random(seed));
+        }
+        const vehicle = course.vehicleLanes[0]!.vehicles[0]!;
+        let arranged = placeOnRow(createHorsemasterState(course), 6, 7);
+        course.vehicleLanes[0]!.vehicles
+            .filter(candidate => candidate.id !== vehicle.id)
+            .forEach((candidate, index) => {
+                arranged = setVehicleCenter(arranged, candidate.id, 40 + index * 560);
+            });
+        // Slot 0 sits at -24, so this puts the truck's center exactly under
+        // the horse at landing — 24px from either machine, far beyond the
+        // old 12px per-slot tolerance.
+        arranged = arrangeSlotLanding(arranged, vehicle.id, 0, 360 - 24);
+        const landed = advanceHorsemaster(arranged, UP, HORSEMASTER_HOP_DURATION_MS);
+        const carrier = landed.state.vehicles.find(
+            candidate => candidate.id === vehicle.id
+        )!;
+        const ride = landed.state.player.ride;
+
+        expect(landed.state.player.lives).toBe(course.startingLives);
+        expect(landed.state.player.row).toBe(7);
+        expect(ride?.vehicleId).toBe(vehicle.id);
+        expect([0, 1]).toContain(ride?.slotIndex);
+        expect(landed.state.player.x).toBeCloseTo(
+            carrier.x + vehicle.slots[ride!.slotIndex]!.offsetX,
+            6
+        );
+    });
+
+    it('accepts landings overlapping 80% of the truck, cab included, and rejects less', () => {
+        // Find a course whose first vehicle lane is single-slot (yellow).
+        let course = createHorsemasterCourse(new Mulberry32Random(1));
+        for (let seed = 2; course.vehicleLanes[0]!.tier === 'green'; seed++) {
+            course = createHorsemasterCourse(new Mulberry32Random(seed));
+        }
+        const lane = course.vehicleLanes[0]!;
+        const vehicle = lane.vehicles[0]!;
+        const direction = lane.direction;
+        const parkOthers = (state: HorsemasterState): HorsemasterState => {
+            let next = state;
+            const positions = [40, 140, 600];
+            lane.vehicles
+                .filter(candidate => candidate.id !== vehicle.id)
+                .forEach((candidate, index) => {
+                    next = setVehicleCenter(
+                        next,
+                        candidate.id,
+                        positions[index % positions.length]!
+                    );
+                });
+            return next;
+        };
+        const jumpWithTruckAt = (centerOffset: number) => {
+            let state = parkOthers(placeOnRow(createHorsemasterState(course), 6, 7));
+            state = arrangeSlotLanding(state, vehicle.id, 0, 360 + centerOffset);
+            return advanceHorsemaster(state, UP, HORSEMASTER_HOP_DURATION_MS).state;
+        };
+
+        // 28px behind the bed center: 80%+ of the horse still overlaps the bed.
+        const bedLanding = jumpWithTruckAt(direction * 28);
+        expect(bedLanding.player.lives).toBe(course.startingLives);
+        expect(bedLanding.player.ride?.vehicleId).toBe(vehicle.id);
+
+        // 45px onto the leading side: the driver's cab counts as the truck too.
+        const cabLanding = jumpWithTruckAt(-direction * 45);
+        expect(cabLanding.player.lives).toBe(course.startingLives);
+        expect(cabLanding.player.ride?.vehicleId).toBe(vehicle.id);
+
+        // 34px behind the bed leaves less than 80% of the horse aboard.
+        const missed = jumpWithTruckAt(direction * 34);
+        expect(missed.player.lives).toBe(course.startingLives - 1);
+        expect(missed.player.ride).toBeNull();
+        expect(missed.player.row).toBe(0);
     });
 
     it('prevents another hop during recovery and fails after the final heart', () => {
