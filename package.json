@@ -12,6 +12,7 @@
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "assets:generate": "node scripts/generate-sprites.mjs && node scripts/generate-objective-sprites.mjs && node scripts/generate-space-sprites.mjs",
+    "deploy": "node scripts/deploy.mjs",
     "check": "npm run typecheck && npm run test && npm run build",
     "check:all": "npm run check && npm run test:e2e"
   },

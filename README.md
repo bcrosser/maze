@@ -58,6 +58,37 @@ npm run preview
 
 The production files are written to `dist/`. Deploy that directory to any static web host; Node.js is required to install dependencies and build the project, but it is not required by browsers playing the deployed game.
 
+### Deploy
+
+`npm run deploy` builds the project and copies `dist/` to the local web root:
+
+```sh
+npm run deploy
+```
+
+The default destination is `E:\xampp\htdocs\rpg5`. Options (note the `--` separator required by npm):
+
+| Option | Effect |
+| --- | --- |
+| `--target <dir>` | Copy somewhere else instead of the default destination. |
+| `--ga <id>` | Build with the Google Analytics tag for that measurement id. |
+| `--no-ga` | Build without analytics even when an id is configured. |
+| `--clean` | Delete the destination contents before copying, removing stale builds. |
+| `--skip-build` | Copy the existing `dist/` output without rebuilding. |
+
+```sh
+npm run deploy -- --ga G-XXXXXXXXXX --clean
+```
+
+### Google Analytics
+
+The measurement id is never committed. Supply it in one of two ways:
+
+- Pass `npm run deploy -- --ga G-XXXXXXXXXX` for a one-off deploy.
+- Copy `.env.example` to `.env.local` and set `GA_MEASUREMENT_ID` (and optionally `DEPLOY_TARGET`). `.env.local` is git-ignored, so `npm run deploy`, `npm run build`, and `npm run dev` all pick the id up automatically.
+
+When an id is present the standard `gtag.js` loader and `gtag('config', ...)` snippet are injected into `<head>` at build time. With no id, the markup is omitted entirely, so untagged builds stay the default for anyone cloning the repository. Ids are validated against `^[A-Za-z0-9_-]{4,64}$` before they reach the HTML.
+
 ## Controls
 
 - Overworld: arrows/WASD or the D-pad move and bump-attack. `F`/Attack selects a ranged direction, `Q`/Use activates the first quick slot, `E` interacts or disarms, `I` opens the backpack, and `.` or Space waits.
