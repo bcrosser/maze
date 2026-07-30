@@ -1601,15 +1601,48 @@ Driving is two-axis. Steering is continuous rather than lane-snapped, and the ca
 moves **up and down** its screen band; the screen row shifts the car's effective world
 position, so driving up genuinely closes on the traffic ahead.
 
+### The road
+
+The road is a **smooth ribbon**, not a chain of straight panels. Its centreline and its
+width are each the sum of two long sine waves, so both the road and its rate of turn are
+continuous at every distance: there are no corners at segment joins, which is what used to
+make a bend unreadable. The amplitudes are bounded so the widest road the waves can produce
+still fits the world, and therefore nothing about the shape ever has to be clipped.
+
+The default carriageway is **six lanes** of `CASINO_HEIST_LANE_WIDTH` — wide enough for six
+vehicles abreast, so traffic no longer has to pile into itself. Lanes hold a fixed width and
+are numbered outward from the centreline with no lane sitting on it, so the middle of the
+road is always either a painted line or a median. Where the road narrows past the outermost
+lane, whatever is in it merges inward rather than driving onto the gravel.
+
+Stretches of the road **divide around a median** the driver may pass either side of. The
+median grows out of the tarmac and shrinks back into it over a taper, so a carriageway never
+appears out of nowhere ahead of the car, and the road widens by the median so a split costs
+no lanes. The median itself is solid: hitting it shoves the car back onto the carriageway it
+came from and costs hull. Medians are kept clear of the run-in to the drain, which needs a
+full carriageway to itself.
+
 The road carries ordinary users — cars, buses, trucks, motorcycles — every one of them
-slower than the getaway car, plus drifting curves and occasional split carriageways with
-a solid central divider. Police pursue faster than the player: `cop-car` rams and fires
+slower than the getaway car. Police pursue faster than the player: `cop-car` rams and fires
 sideways from a rolled-down window, `swat-van` is heavily armoured and rams harder. No
 vehicle passes through another: a pursuer that piles into traffic wrecks both, which is
 the main way a chase thins itself out. A ram is a **shove**, not a hit — the consequence
 comes from where the shove lands, and grinding the verge only costs hull after a
-sustained scrape. Police helicopters hold station ahead and release a partial-width spike
-strip unless they are shot down first.
+sustained scrape. A clip deflects the car to whichever side has road, so a collision never
+wedges it against the verge. Police helicopters hold station ahead and release a
+partial-width spike strip unless they are shot down first.
+
+### Shooting, and what a wreck does
+
+**Anything on the road can be shot.** A car or a motorcycle goes down to a single hit; a
+truck or a bus takes two and visibly darkens after the first. The flamethrower burns out
+whatever is alongside as well.
+
+Nothing wrecked is left parked in a lane. A wreck loses its driver, so it coasts, slews off
+by the nearer verge under its own momentum, spins as it goes, and is gone once it is clear of
+the tarmac — the point of shooting a car is to open the road, not to build a wall out of it.
+This applies to police wrecks identically: a wrecked pursuer slides off rather than blinking
+out of existence.
 
 The car starts unarmed. Road pickups grant the pulse gun, ammunition, and three devices —
 oil slick, smoke screen, flamethrower — and maze shops sell the same devices as permanent
@@ -1620,10 +1653,16 @@ the flamethrower burns out a light car and swerves an armoured van.
 
 Generation is certified geometrically rather than by a scripted driver: `hasCasinoHeistDrivableCorridor`
 sweeps the road and proves that at every point there is a lateral position inside the
-tarmac, clear of the divider and of the traffic the car meets there, reachable from the
+tarmac, clear of the median and of the traffic the car meets there, reachable from the
 previous point at the car's own steering speed, and that the resulting corridor reaches
-the drain mouth. Traffic is additionally never allowed to seal a distance band, and a
-spike strip may never span the road. Combat is therefore never required. The HUD shows
+the drain mouth. Traffic is additionally never allowed to close more than half the lanes of
+a distance band, and a spike strip may never span the road. Where traffic from neighbouring
+stretches nonetheless drifts into a wall — the per-band rule looks at one stretch at a
+time — generation lifts the offending vehicles back off the road one at a time rather than
+rerolling the escape; removing traffic can only open the corridor and an empty road always
+has one, so that always terminates. The road itself is checked to stay inside the world, to
+stay within its width bounds, to never turn faster than the car can steer, and to leave both
+carriageways of every median driveable. Combat is therefore never required. The HUD shows
 route progress to the drain, hull, weapon/ammo, the armed device and its charges,
 incoming threats, and any maze-item bonus.
 
@@ -1676,6 +1715,14 @@ a single contact at a time.
 - Update the canvas accessible label when entering each minigame and provide a DOM `aria-live="polite"` status region for objectives, loot choices, monster intents, traps, resources, damage, and results.
 - Provide visible keyboard controls and a replayable help action.
 - Essential supporting text must render at 14 CSS px or larger and primary objectives/actions at 16 CSS px or larger after scaling.
+- Canvas text is subject to FIT scaling, so a 672-game-pixel canvas is only about 390 CSS px
+  wide on a phone: 16 game px reads as roughly 9 CSS px there, well under the floor above.
+  Briefing overlays therefore go through the shared `createHelpOverlay`, which measures the
+  body with an off-screen probe, shrinks the type only as far as it must within a fixed
+  range, and sizes the panel to the measured text — so a briefing can neither overflow its
+  panel nor drop below a readable size. Briefing copy is written short enough that the
+  largest size fits; the shrink is a backstop, not the plan. Scenes whose help spans more
+  than one panel's worth of text page it instead (Pipe's steps, the maze legend).
 - Store shared reduced-motion and reduced-flashing preferences and apply them to overworld generation, liquid animation, Lock feedback, Space effects, and Platformer camera effects.
 - Every action exposed by a DOM overlay must be keyboard focusable, visibly focused, and labelled. Canvas-only actions need an equivalent visible instruction and accessible status update.
 

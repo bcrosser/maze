@@ -58,11 +58,11 @@ const HELP_STEPS = Object.freeze([
     }),
     Object.freeze({
         title: '2 / 3  STAY AHEAD',
-        body: 'Coolant starts slowly when this guide closes.\nWhen your route is ready, press FINISH PLACING to lock it\nand run the coolant four times faster.'
+        body: 'Coolant creeps once this guide closes.\nPress FINISH to lock the route\nand run it four times faster.'
     }),
     Object.freeze({
         title: '3 / 3  OVERWRITE COST',
-        body: 'You may replace dry pipe, but every overwrite pushes\nliquid forward by one full flow step.'
+        body: 'Replacing dry pipe is allowed,\nbut it pushes the liquid one step on.'
     })
 ]);
 
@@ -246,12 +246,13 @@ export class PipeDreamScene extends Phaser.Scene {
             fontSize: '24px',
             align: 'center'
         }).setOrigin(0.5).setDepth(21);
+        // Large enough to survive the canvas being scaled down onto a phone.
         this.helpBody = this.add.text(VIEW_SIZE / 2, 333, '', {
             color: '#f5f0df',
             fontFamily: 'Georgia, serif',
-            fontSize: '18px',
+            fontSize: '22px',
             align: 'center',
-            lineSpacing: 9
+            lineSpacing: 8
         }).setOrigin(0.5).setDepth(21);
         this.helpFooter = this.add.text(VIEW_SIZE / 2, 420, '', {
             color: '#67d5e8',

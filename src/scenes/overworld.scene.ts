@@ -282,6 +282,29 @@ interface MazeHelpPage {
     readonly body: string;
 }
 
+/** Lines that fit one legend page at the size the panel renders. */
+const HELP_LINES_PER_PAGE = 13;
+
+/**
+ * Splits a section into as many pages as its length needs. Registry-driven
+ * sections grow whenever content is added, so the legend paginates rather than
+ * letting a page run off the panel.
+ */
+function paginateHelp(
+    title: string,
+    lines: readonly string[]
+): readonly MazeHelpPage[] {
+    const trimmed = [...lines];
+    while (trimmed.at(-1) === '') trimmed.pop();
+    const pageCount = Math.max(1, Math.ceil(trimmed.length / HELP_LINES_PER_PAGE));
+    return Array.from({length: pageCount}, (_unused, index) => ({
+        title: pageCount === 1 ? title : `${title} ${index + 1}/${pageCount}`,
+        body: trimmed
+            .slice(index * HELP_LINES_PER_PAGE, (index + 1) * HELP_LINES_PER_PAGE)
+            .join('\n')
+    }));
+}
+
 /**
  * Builds the legend from the live registries, so a newly added item, monster, or
  * material documents itself instead of drifting out of date.
@@ -314,75 +337,56 @@ function buildMazeHelpPages(state: CampaignState): readonly MazeHelpPage[] {
         .filter(id => getMaterialHardness(id) === undefined)
         .map(id => MATERIALS[id].name);
 
+    const levelNumber = getCampaignLevelNumber(state);
+    const pricePercent = Math.round(getLevelPriceMultiplier(levelNumber) * 100);
     return [
-        {
-            title: 'MAZE LEGEND',
-            body: [
-                'Tap anything to inspect it: a wall reports its material and',
-                'whether your pick can cut it; monsters report health, armor, and',
-                'intent; items report quality and affixes.',
-                '',
-                'The blue rolling ball is you. Little stairs going down are the',
-                'level exit — reach them once the required objectives are done.',
-                'Diamond markers are objectives, and the ↻ button beside the',
-                'Objective readout retargets the one you are tracking.',
-                '',
-                `Salvage sells at shops for $2 each. Prices rise 30% per level,`,
-                `so level ${getCampaignLevelNumber(state)} charges` +
-                ` ${Math.round(getLevelPriceMultiplier(getCampaignLevelNumber(state)) * 100)}%` +
-                ' of base.',
-                'Shops also buy carried loot and sell Expedition Packs that',
-                'permanently widen your backpack.'
-            ].join('\n')
-        },
-        {
-            title: 'CONTROLS',
-            body: [
-                'Stick or arrows/WASD: move, and bump a monster to attack it.',
-                'ATTACK then a direction: fire a ranged weapon.',
-                'Quick slots 1-3: use the assigned item; assign them in Items.',
-                'INTERACT (E): pick up, disarm, shop, or start an objective.',
-                'WAIT (. or Space): spend a turn in place.',
-                'ITEMS (I): open the turn-frozen backpack.',
-                'Escape or MENU: pause.',
-                '',
-                'Mining is automatic: walk into a mineable wall while carrying',
-                'pick charges. The HUD shows mining power and charges left, and',
-                'each cut plays a short pick animation.',
-                '',
-                'Every minigame uses this same stick and button deck; only the',
-                'button labels change.'
-            ].join('\n')
-        },
-        {
-            title: 'ITEMS',
-            body: itemLines.join('\n\n')
-        },
-        {
-            title: 'MONSTERS',
-            body: [
-                ...monsterLines,
-                '',
-                'Elite monsters glow gold and hit harder; a red tint means the',
-                'monster has already committed to an attack next turn.',
-                'Floating numbers show damage dealt and taken.'
-            ].join('\n')
-        },
-        {
-            title: 'WALLS',
-            body: [
-                'Mining power must meet or beat a wall hardness to cut it:',
-                mineable.join(', '),
-                '',
-                'These never yield to any tool:',
-                solid.join(', '),
-                '',
-                'Wall texture follows the material tags: blocks and cracks for',
-                'minerals, fibres for organics, ripples for wet, embers for hot,',
-                'flakes for cold, and sparkles for magical.',
-                'The outer wall of the maze can never be mined.'
-            ].join('\n')
-        }
+        ...paginateHelp('MAZE LEGEND', [
+            'Tap anything to inspect it.',
+            'A wall says what it is and whether',
+            'your pick can cut it.',
+            '',
+            'The blue rolling ball is you.',
+            'Stairs going down are the exit.',
+            'Diamonds are objectives; ↻ beside the',
+            'Objective readout retargets them.',
+            '',
+            `Shops buy salvage at $2 and pay for loot.`,
+            `Level ${levelNumber} charges ${pricePercent}% of base.`
+        ]),
+        ...paginateHelp('CONTROLS', [
+            'Pad or arrows: move. Bump to attack.',
+            'ATTACK then a direction: fire.',
+            'Quick slots 1-3: use an assigned item.',
+            'INTERACT: pick up, disarm, shop, begin.',
+            'WAIT: spend a turn. ITEMS: backpack.',
+            'MENU or Escape: pause.',
+            '',
+            'Mining is automatic: walk into a',
+            'mineable wall while you have charges.',
+            '',
+            'Every game uses this same deck.',
+            'Only the button labels change.'
+        ]),
+        ...paginateHelp('ITEMS', itemLines.flatMap(line => [line, ''])),
+        ...paginateHelp('MONSTERS', [
+            ...monsterLines,
+            '',
+            'Gold tint: elite, and hits harder.',
+            'Red tint: already committed to attack.'
+        ]),
+        ...paginateHelp('WALLS', [
+            'Your mining power must meet a wall',
+            'hardness to cut it:',
+            mineable.join(', '),
+            '',
+            'These never yield to any tool:',
+            solid.join(', '),
+            '',
+            'Texture follows the tags: cracks for',
+            'minerals, fibres for organics, ripples',
+            'for wet, embers for hot, flakes for',
+            'cold, sparkles for magical.'
+        ])
     ];
 }
 
@@ -2758,11 +2762,13 @@ export class OverworldScene extends Phaser.Scene {
             `Page ${boundedPage + 1}/${pages.length}`,
             {color: '#b6b09f', fontFamily: 'Georgia, serif', fontSize: '14px'}
         ).setOrigin(0.5));
+        // The canvas is scaled down onto a phone, so the legend is set large and
+        // paginated by line budget rather than crammed onto fewer pages.
         container.add(this.add.text(-262, -178, helpPage.body, {
             color: '#f5f0df',
             fontFamily: 'Georgia, serif',
-            fontSize: '15px',
-            lineSpacing: 6,
+            fontSize: '19px',
+            lineSpacing: 7,
             wordWrap: {width: 524}
         }));
 

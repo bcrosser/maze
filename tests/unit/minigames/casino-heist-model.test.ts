@@ -9,11 +9,16 @@ import {
     CASINO_HEIST_PLAYER_MAX_SCREEN_Y,
     CASINO_HEIST_PLAYER_MIN_SCREEN_Y,
     CASINO_HEIST_PLAYER_SCREEN_Y,
+    CASINO_HEIST_LANES,
+    CASINO_HEIST_LANE_WIDTH,
+    CASINO_HEIST_MAX_ROAD_WIDTH,
+    CASINO_HEIST_MIN_ROAD_WIDTH,
     CASINO_HEIST_PLAYER_SPEED,
     CASINO_HEIST_REWARD_CREDITS,
     CASINO_HEIST_ROAD_WIDTH,
     NEUTRAL_CASINO_HEIST_INPUT,
     advanceCasinoHeist,
+    casinoHeistLaneX,
     canonicalCasinoHeistCourseSignature,
     chooseCasinoHeistWitnessInput,
     createCasinoHeistCourse,
@@ -31,7 +36,8 @@ import {
     type CasinoHeistDeviceKind,
     type CasinoHeistInput,
     type CasinoHeistPursuerDefinition,
-    type CasinoHeistState
+    type CasinoHeistState,
+    type CasinoHeistTrafficKind
 } from '../../../src/minigames/heist/casino-heist-model';
 
 function course(seed = 7, segmentCount = 10): CasinoHeistCourse {
@@ -40,6 +46,20 @@ function course(seed = 7, segmentCount = 10): CasinoHeistCourse {
 
 function input(overrides: Partial<CasinoHeistInput> = {}): CasinoHeistInput {
     return {...NEUTRAL_CASINO_HEIST_INPUT, ...overrides};
+}
+
+/** A bus abreast in every lane, which is the one thing the road may not do. */
+function sealedBand(startDistance: number) {
+    return CASINO_HEIST_LANES.map((lane, index) => ({
+        id: `blocking-${index}`,
+        kind: 'bus' as const,
+        lane,
+        distance: startDistance + 100,
+        speed: 90,
+        width: 56,
+        length: 124,
+        health: 2
+    }));
 }
 
 function stepFor(
@@ -55,6 +75,24 @@ function stepFor(
         events.push(...result.events.map(event => event.kind));
     }
     return {state, events};
+}
+
+/** Steps until one of the named events fires, and reports whether it did. */
+function stepUntilEvent(
+    initial: CasinoHeistState,
+    control: CasinoHeistInput,
+    eventKind: string,
+    maximumTicks = 200
+): {readonly state: CasinoHeistState; readonly fired: boolean} {
+    let state = initial;
+    for (let tick = 0; tick < maximumTicks && state.status === 'active'; tick++) {
+        const result = stepCasinoHeist(state, control);
+        state = result.state;
+        if (result.events.some(event => event.kind === eventKind)) {
+            return {state, fired: true};
+        }
+    }
+    return {state, fired: false};
 }
 
 /** Places a single pursuer relative to the player for a focused interaction. */
@@ -81,7 +119,10 @@ function withPursuer(
             fireCooldownTicks: placement.fireCooldownTicks ?? 999,
             contactCooldownMs: placement.contactCooldownMs ?? 999,
             blindedMs: 0,
-            spinOutMs: 0
+            spinOutMs: 0,
+            wreckMs: 0,
+            driftX: 0,
+            spin: 0
         }]
     };
 }
@@ -159,17 +200,86 @@ describe('Casino Heist escape generation', () => {
         expect(swat.health).toBeGreaterThan(cop.health);
     });
 
-    it('splits the road without ever blocking its own safe lane', () => {
+    it('divides the road around a median that tapers in and out of the tarmac', () => {
         let sawSplit = false;
         for (let seed = 0; seed < 40; seed++) {
-            for (const segment of course(seed).segments) {
-                if (!segment.split) continue;
+            const escape = course(seed, 20);
+            for (const split of escape.shape.splits) {
                 sawSplit = true;
-                expect(segment.safeLane).not.toBe(0);
-                expect(segment.traffic.every(vehicle => vehicle.lane !== 0)).toBe(true);
+                // The median starts and ends flush with the road, and reaches its
+                // full width somewhere in between.
+                expect(
+                    getCasinoHeistRoadGeometry(escape, split.startDistance).dividerHalfWidth
+                ).toBe(0);
+                expect(
+                    getCasinoHeistRoadGeometry(escape, split.endDistance).dividerHalfWidth
+                ).toBe(0);
+                const middle = (split.startDistance + split.endDistance) / 2;
+                const centre = getCasinoHeistRoadGeometry(escape, middle);
+                expect(centre.dividerHalfWidth).toBeGreaterThan(0);
+                expect(centre.split).toBe(true);
+                // Both carriageways stay wide enough to drive down.
+                expect(centre.width / 2).toBeGreaterThan(CASINO_HEIST_LANE_WIDTH * 2);
+                // Medians never reach the run-in to the drain.
+                expect(split.endDistance).toBeLessThan(escape.turnoffDistance);
             }
         }
         expect(sawSplit).toBe(true);
+    });
+
+    it('draws a road that turns and changes width without ever kinking', () => {
+        for (let seed = 0; seed < 20; seed++) {
+            const escape = course(seed, 20);
+            const step = 8;
+            const centres: number[] = [];
+            const widths: number[] = [];
+            for (let distance = 0; distance <= escape.overshootDistance; distance += step) {
+                const geometry = getCasinoHeistRoadGeometry(escape, distance);
+                centres.push(geometry.centerX);
+                widths.push(geometry.width);
+                expect(geometry.leftX).toBeGreaterThanOrEqual(0);
+                expect(geometry.rightX).toBeLessThanOrEqual(escape.width);
+            }
+            // A kink is a jump in slope. Bounding the change of slope between
+            // samples is what rules the old per-segment corners out.
+            let maximumSlopeChange = 0;
+            for (let index = 2; index < centres.length; index++) {
+                const before = (centres[index - 1]! - centres[index - 2]!) / step;
+                const after = (centres[index]! - centres[index - 1]!) / step;
+                maximumSlopeChange = Math.max(maximumSlopeChange, Math.abs(after - before));
+            }
+            // The old per-segment road jumped by around 0.4 here.
+            expect(maximumSlopeChange).toBeLessThan(0.05);
+            // The road really does turn, and really does breathe.
+            expect(Math.max(...centres) - Math.min(...centres)).toBeGreaterThan(60);
+            expect(Math.max(...widths) - Math.min(...widths)).toBeGreaterThan(60);
+            expect(Math.min(...widths)).toBeGreaterThanOrEqual(CASINO_HEIST_MIN_ROAD_WIDTH - 1);
+            expect(Math.max(...widths)).toBeLessThanOrEqual(CASINO_HEIST_MAX_ROAD_WIDTH + 1);
+        }
+    });
+
+    it('lays out six lanes the default road can take side by side', () => {
+        expect(CASINO_HEIST_LANES).toHaveLength(6);
+        expect(CASINO_HEIST_ROAD_WIDTH).toBe(CASINO_HEIST_LANE_WIDTH * 6);
+        const escape = course();
+        // Sample the narrowest road this course reaches and check every lane
+        // still holds a bus without leaving the tarmac.
+        let narrowest = getCasinoHeistRoadGeometry(escape, 0);
+        for (let distance = 0; distance <= escape.overshootDistance; distance += 16) {
+            const geometry = getCasinoHeistRoadGeometry(escape, distance);
+            if (geometry.width < narrowest.width) narrowest = geometry;
+        }
+        const positions = CASINO_HEIST_LANES.map(lane =>
+            casinoHeistLaneX(narrowest, lane, 28)
+        );
+        for (const position of positions) {
+            expect(position).toBeGreaterThanOrEqual(narrowest.leftX);
+            expect(position).toBeLessThanOrEqual(narrowest.rightX);
+        }
+        // Lanes stay in order across the road and never coincide.
+        for (let index = 1; index < positions.length; index++) {
+            expect(positions[index]!).toBeGreaterThan(positions[index - 1]!);
+        }
     });
 
     it('never lets a dropped spike strip cover the whole road', () => {
@@ -213,21 +323,7 @@ describe('Casino Heist escape generation', () => {
         const blocked: CasinoHeistCourse = {
             ...escape,
             segments: escape.segments.map(segment =>
-                segment === target
-                    ? {
-                        ...segment,
-                        split: false,
-                        traffic: ([-1, 0, 1] as const).map((lane, index) => ({
-                            id: `blocking-${index}`,
-                            kind: 'bus' as const,
-                            lane,
-                            distance: segment.startDistance + 100,
-                            speed: 90,
-                            width: 56,
-                            length: 124
-                        }))
-                    }
-                    : segment
+                segment === target ? {...segment, traffic: sealedBand(segment.startDistance)} : segment
             )
         };
 
@@ -367,7 +463,8 @@ describe('Casino Heist devices', () => {
             kind: 'pursuer-wrecked',
             cause: 'oil-slick'
         }));
-        expect(wrecked.state.pursuers).toHaveLength(0);
+        // The wreck stays on screen long enough to slide off the road.
+        expect(wrecked.state.pursuers.every(pursuer => pursuer.health === 0)).toBe(true);
         expect(wrecked.state.telemetry.pursuersWrecked).toBe(1);
     });
 
@@ -502,8 +599,11 @@ describe('Casino Heist pursuit', () => {
                 x: 300,
                 previousDistance: 500,
                 distance: 500,
+                health: vehicle.health,
                 wrecked: false,
-                wreckMs: 0
+                wreckMs: 0,
+                driftX: 0,
+                spin: 0
             }]
         };
         const result = stepCasinoHeist(collided, NEUTRAL_CASINO_HEIST_INPUT);
@@ -512,7 +612,7 @@ describe('Casino Heist pursuit', () => {
             kind: 'pursuer-wrecked',
             cause: 'traffic'
         }));
-        expect(result.state.pursuers).toHaveLength(0);
+        expect(result.state.pursuers.every(pursuer => pursuer.health === 0)).toBe(true);
         expect(result.state.traffic.find(candidate =>
             candidate.definitionId === vehicle.id
         )?.wrecked).toBe(true);
@@ -554,6 +654,153 @@ describe('Casino Heist pursuit', () => {
 
         expect(result.events).toContain('pursuer-wrecked');
         expect(result.state.telemetry.pursuersDestroyed).toBeGreaterThan(0);
+    });
+
+    /**
+     * An otherwise empty road with one vehicle of the requested kind directly in
+     * front of the player, so a shot can only ever hit that one.
+     */
+    function withTrafficAhead(kind: CasinoHeistTrafficKind): CasinoHeistState {
+        for (let seed = 0; seed < 80; seed++) {
+            const escape = course(seed);
+            const definition = escape.segments
+                .flatMap(segment => segment.traffic)
+                .find(vehicle => vehicle.kind === kind);
+            if (!definition) continue;
+            // Put it in the lane the player starts in so it stays in the line of
+            // fire instead of steering out of it.
+            const solo: CasinoHeistCourse = {
+                ...escape,
+                segments: escape.segments.map(segment => ({
+                    ...segment,
+                    traffic: segment.traffic
+                        .filter(vehicle => vehicle.id === definition.id)
+                        .map(vehicle => ({...vehicle, lane: escape.segments[0]!.safeLane})),
+                    pursuers: [],
+                    helicopters: []
+                }))
+            };
+            const base = createCasinoHeistState(solo);
+            return {
+                ...base,
+                player: {...base.player, weapon: 'pulse-cannon', ammo: 20},
+                spawnedTrafficIds: [definition.id],
+                traffic: [{
+                    definitionId: definition.id,
+                    previousX: base.player.x,
+                    x: base.player.x,
+                    previousDistance: base.player.distance + 150,
+                    distance: base.player.distance + 150,
+                    health: definition.health,
+                    wrecked: false,
+                    wreckMs: 0,
+                    driftX: 0,
+                    spin: 0
+                }]
+            };
+        }
+        throw new Error(`No generated escape offered a ${kind}.`);
+    }
+
+    it('destroys an ordinary car with a single shot', () => {
+        const result = stepUntilEvent(
+            withTrafficAhead('car'),
+            input({fire: true}),
+            'traffic-wrecked'
+        );
+
+        expect(result.fired).toBe(true);
+        expect(result.state.telemetry.trafficWrecked).toBe(1);
+    });
+
+    it('needs two shots to bring down something as big as a bus', () => {
+        const start = withTrafficAhead('bus');
+        const vehicle = start.traffic[0]!;
+        expect(vehicle.health).toBe(2);
+
+        // One hit only dents it: it is still driving, and marked as damaged.
+        let state = start;
+        let wrecked = false;
+        let sawDamagedButDriving = false;
+        for (let tick = 0; tick < 200 && !wrecked && state.status === 'active'; tick++) {
+            const result = stepCasinoHeist(state, input({fire: true}));
+            state = result.state;
+            const target = state.traffic.find(candidate =>
+                candidate.definitionId === vehicle.definitionId
+            );
+            if (target && !target.wrecked && target.health === 1) sawDamagedButDriving = true;
+            wrecked = result.events.some(event => event.kind === 'traffic-wrecked');
+        }
+
+        expect(sawDamagedButDriving).toBe(true);
+        expect(wrecked).toBe(true);
+        expect(state.telemetry.shotsFired).toBeGreaterThanOrEqual(2);
+    });
+
+    it('sends a wreck sliding off the road instead of parking it in a lane', () => {
+        const start = withTrafficAhead('car');
+        const vehicleId = start.traffic[0]!.definitionId;
+        const hit = stepUntilEvent(start, input({fire: true}), 'traffic-wrecked');
+        expect(hit.fired).toBe(true);
+        let state = hit.state;
+        const wreck = state.traffic.find(candidate => candidate.definitionId === vehicleId)!;
+        expect(wreck.wrecked).toBe(true);
+        expect(Math.abs(wreck.driftX)).toBeGreaterThan(0);
+
+        // It keeps moving sideways, turns as it goes, and is gone before long.
+        let previousOffset = Math.abs(
+            wreck.x - getCasinoHeistRoadGeometry(state.course, wreck.distance).centerX
+        );
+        let turned = false;
+        for (let tick = 0; tick < 200; tick++) {
+            state = stepCasinoHeist(state, NEUTRAL_CASINO_HEIST_INPUT).state;
+            const sliding = state.traffic.find(candidate =>
+                candidate.definitionId === vehicleId
+            );
+            if (!sliding) break;
+            const offset = Math.abs(
+                sliding.x - getCasinoHeistRoadGeometry(state.course, sliding.distance).centerX
+            );
+            expect(offset).toBeGreaterThan(previousOffset - 1);
+            previousOffset = offset;
+            if (Math.abs(sliding.spin) > 0.5) turned = true;
+        }
+
+        expect(turned).toBe(true);
+        expect(state.traffic.some(candidate => candidate.definitionId === vehicleId)).toBe(false);
+    });
+
+    it('sends a wrecked pursuer off the road too rather than deleting it', () => {
+        const cop = courseWithPursuer(pursuer => pursuer.kind === 'cop-car');
+        // Clear the road so the only thing that can be shot is this one cruiser.
+        const solo: CasinoHeistCourse = {
+            ...cop.course,
+            segments: cop.course.segments.map(segment => ({
+                ...segment,
+                traffic: [],
+                pursuers: segment.pursuers.filter(pursuer => pursuer.id === cop.pursuer.id),
+                helicopters: []
+            }))
+        };
+        const base = createCasinoHeistState(solo);
+        const target = withPursuer(base, cop.pursuer, {
+            x: base.player.x,
+            distance: base.player.distance + 60
+        });
+        const hit = stepUntilEvent(
+            {...target, player: {...target.player, weapon: 'pulse-cannon', ammo: 20}},
+            input({fire: true}),
+            'pursuer-wrecked'
+        );
+        expect(hit.fired).toBe(true);
+        const wreck = hit.state.pursuers.find(candidate =>
+            candidate.definitionId === cop.pursuer.id
+        );
+
+        expect(wreck).toBeDefined();
+        expect(wreck!.health).toBe(0);
+        expect(Math.abs(wreck!.driftX)).toBeGreaterThan(0);
+        expect(wreck!.wreckMs).toBeGreaterThan(0);
     });
 });
 
@@ -616,6 +863,10 @@ describe('Casino Heist helicopter', () => {
         const spawned = stepFor(helicopterState(), 4).state;
         const result = stepFor({
             ...spawned,
+            // Clear the road so the strip is the only thing that can hurt the car,
+            // and clear any recovery window that would absorb the hit.
+            player: {...spawned.player, recoveryMs: 0},
+            traffic: [],
             hazards: [{
                 id: 'test-strip',
                 kind: 'spike-strip' as const,
@@ -704,8 +955,11 @@ describe('Casino Heist escape resolution', () => {
                 x: base.player.x,
                 previousDistance: base.player.distance,
                 distance: base.player.distance,
+                health: vehicle.health,
                 wrecked: false,
-                wreckMs: 0
+                wreckMs: 0,
+                driftX: 0,
+                spin: 0
             }]
         }, NEUTRAL_CASINO_HEIST_INPUT);
 
@@ -729,22 +983,22 @@ describe('Casino Heist escape resolution', () => {
     it('refuses a course whose corridor is walled off by parked traffic', () => {
         const escape = course();
         const target = escape.segments[4]!;
-        // Three stalled, oversized buses abreast seal the whole carriageway.
+        // Stalled, oversized buses abreast seal the whole carriageway.
         const walled: CasinoHeistCourse = {
             ...escape,
             segments: escape.segments.map(segment =>
                 segment === target
                     ? {
                         ...segment,
-                        split: false,
-                        traffic: ([-1, 0, 1] as const).map((lane, index) => ({
+                        traffic: CASINO_HEIST_LANES.map((lane, index) => ({
                             id: `wall-${index}`,
                             kind: 'bus' as const,
                             lane,
                             distance: target.startDistance + 120,
                             speed: 0,
                             width: 220,
-                            length: 124
+                            length: 124,
+                            health: 2
                         }))
                     }
                     : segment

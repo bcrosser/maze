@@ -634,27 +634,28 @@ export class SafeDialScene extends Phaser.Scene {
         const panel = this.add.rectangle(336, 332, 528, 414, 0x20231f)
             .setStrokeStyle(3, COLORS.accent)
             .setDepth(depth + 1);
-        const title = this.add.text(336, 162, 'HOW TO CRACK THIS SAFE', {
+        const title = this.add.text(336, 168, 'HOW TO CRACK THIS SAFE', {
             color: '#efc75e',
             fontFamily: 'Georgia, serif',
             fontSize: '25px'
         }).setOrigin(0.5).setDepth(depth + 2);
-        const body = this.add.text(112, 202, [
-            '1  Turn the dial — drag it or use the arrow keys.',
-            '    The combination is hidden. Your stethoscope is not.',
+        // Short lines at a large size so the briefing survives phone scaling.
+        const body = this.add.text(336, 300, [
+            '1  Turn the dial.',
+            'Drag it, or use the pad.',
             '',
-            '2  Watch the needle at the bottom.',
-            '    It fills and quivers as you close in on the number.',
+            '2  Watch the needle below.',
+            'It fills as you close in.',
             '',
-            '3  When it reads HOT, press LOCK IN.',
-            '    Lock every gate, then pull the HANDLE. False gates',
-            '    cost focus and rattle the alarm.'
+            '3  At HOT, press SET GATE.',
+            'All gates set: pull the HANDLE.'
         ], {
             color: '#f5f0df',
             fontFamily: 'Georgia, serif',
-            fontSize: '17px',
-            lineSpacing: 5
-        }).setDepth(depth + 2);
+            fontSize: '22px',
+            align: 'center',
+            lineSpacing: 6
+        }).setOrigin(0.5).setDepth(depth + 2);
         const note = this.add.text(336, 452, 'Help pauses the alarm.', {
             color: '#b6b09f',
             fontFamily: 'Georgia, serif',

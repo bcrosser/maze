@@ -3,6 +3,7 @@ import Phaser from 'phaser';
 import {getControlDeck} from '../../app/control-deck-host';
 import {SHOOTER_CONTROL_SCHEME, type ControlEvent} from '../../app/control-scheme';
 import type {DirectionId} from '../../domain/overworld/move-player';
+import {createHelpOverlay} from '../help-overlay';
 import {Mulberry32Random} from '../../domain/random/random-source';
 import type {EncounterContext, EncounterResult} from '../../encounters/contracts';
 import {
@@ -1439,46 +1440,28 @@ export class ShooterScene extends Phaser.Scene {
         if (this.helpOverlay !== null || this.finishing) return;
         this.state = setShooterPaused(this.state, true);
         this.clearHeldForOverlay();
-        const panel = this.add.rectangle(336, 370, 540, 360, 0x101b2b, 0.99)
-            .setStrokeStyle(4, COLOR.cyan);
-        const title = this.add.text(336, 229, 'FLIGHT BRIEFING', {
-            color: '#ffd166',
-            fontFamily: 'monospace',
-            fontSize: '25px',
-            fontStyle: 'bold'
-        }).setOrigin(0.5);
-        const instructions = this.add.text(
-            106,
-            273,
-            [
-                '1  MOVE continuously with WASD / arrows / left drag.',
-                '2  TAP FIRE for pulses. HOLD and RELEASE for charge.',
-                '3  BOMB clears nearby hostile shots and grants safety.',
-                '4  Destroy both Warden nodes, then fire in core windows.',
-                '5  Red UNSTABLE modules add power, threat, and score.'
+        const briefing = createHelpOverlay(this, {
+            title: 'FLIGHT BRIEFING',
+            lines: [
+                'Fly with the pad, arrows, or by dragging.',
+                '',
+                'Tap FIRE for pulses.',
+                'Hold and release for a charged shot.',
+                '',
+                'BOMB clears nearby enemy fire.',
+                '',
+                'Break both Warden nodes, then shoot',
+                'the core while it is exposed.'
             ],
-            {
-                color: '#eaf9ff',
-                fontFamily: 'monospace',
-                fontSize: '14px',
-                lineSpacing: 14
-            }
-        );
-        const close = this.add.rectangle(336, 500, 170, 48, 0x26364d)
-            .setStrokeStyle(2, COLOR.gold)
-            .setInteractive({useHandCursor: true});
-        const closeText = this.add.text(336, 500, 'RETURN TO FLIGHT', {
-            color: '#ffffff',
-            fontFamily: 'monospace',
-            fontSize: '13px',
-            fontStyle: 'bold'
-        }).setOrigin(0.5);
-        close.on('pointerdown', () => this.closeHelp());
-        this.helpOverlay = this.add.container(
-            0,
-            0,
-            [panel, title, instructions, close, closeText]
-        ).setDepth(60);
+            closeLabel: 'RETURN TO FLIGHT',
+            accentColor: COLOR.cyan,
+            titleColor: '#ffd166',
+            bodyColor: '#eaf9ff',
+            panelColor: 0x101b2b,
+            viewSize: VIEW_SIZE,
+            onClose: () => this.closeHelp()
+        });
+        this.helpOverlay = this.add.container(0, 0, [...briefing.objects]).setDepth(60);
     }
 
     private closeHelp(): void {

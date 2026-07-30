@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 
 import {getControlDeck} from '../../app/control-deck-host';
 import {ZAPPER_CONTROL_SCHEME, type ControlEvent} from '../../app/control-scheme';
+import {createHelpOverlay, type HelpOverlay} from '../help-overlay';
 import type {PerformanceGrade} from '../../domain/campaign/campaign-state';
 import {Mulberry32Random} from '../../domain/random/random-source';
 import type {
@@ -99,7 +100,7 @@ export class ZapperScene extends Phaser.Scene {
     private graphics!: Phaser.GameObjects.Graphics;
     private hudText!: Phaser.GameObjects.Text;
     private messageText!: Phaser.GameObjects.Text;
-    private helpObjects: Phaser.GameObjects.GameObject[] = [];
+    private helpOverlay: HelpOverlay | null = null;
     private helpOpen = false;
     private chargeHeld = false;
     private pendingLaneDelta: -1 | 0 | 1 = 0;
@@ -139,7 +140,6 @@ export class ZapperScene extends Phaser.Scene {
             }
         );
         this.state = createZapperState(course);
-        this.helpObjects = [];
         this.helpOpen = false;
         this.chargeHeld = false;
         this.pendingLaneDelta = 0;
@@ -337,50 +337,33 @@ export class ZapperScene extends Phaser.Scene {
         this.helpOpen = true;
         this.chargeHeld = false;
         this.state = setZapperPaused(this.state, true);
-        const panel = this.add.rectangle(VIEW_SIZE / 2, VIEW_SIZE / 2, 590, 410, 0x07161a, 0.985)
-            .setStrokeStyle(4, COLORS.slime)
-            .setDepth(100)
-            .setInteractive({useHandCursor: true});
-        const title = this.add.text(VIEW_SIZE / 2, 164, 'NANOTECH SHIFT BRIEFING', {
-            color: '#79ff4d',
-            fontFamily: 'Georgia, serif',
-            fontSize: '24px',
-            fontStyle: 'bold'
-        }).setOrigin(0.5).setDepth(101);
-        const body = this.add.text(VIEW_SIZE / 2, 332,
-            '1 · Move UP or DOWN to an alien’s laboratory table.\n\n' +
-            '2 · Hold FILL until the slime tank reaches 100%.\n\n' +
-            '3 · Press SLIDE to send the blaster across that lane. A bad slide costs a life.\n\n' +
-            '4 · The alien assembles it and slides it back. Stay in that lane and the catch completes the order for you.\n\n' +
-            '5 · A serviced lane slows down for a moment, so keep working to stay ahead.\n\n' +
-            'Finish the quota before three blasters break or aliens reach the service desk.',
-            {
-                color: '#eaffdf',
-                fontFamily: 'Georgia, serif',
-                fontSize: '16px',
-                align: 'center',
-                lineSpacing: 3,
-                wordWrap: {width: 520, useAdvancedWrap: true}
-            }
-        ).setOrigin(0.5).setDepth(101);
-        const close = this.add.text(VIEW_SIZE / 2, 511, 'ENTER · OPEN THE LAB', {
-            color: '#07161a',
-            backgroundColor: '#79ff4d',
-            fontFamily: 'Georgia, serif',
-            fontSize: '17px',
-            fontStyle: 'bold',
-            padding: {x: 18, y: 10}
-        }).setOrigin(0.5).setDepth(101).setInteractive({useHandCursor: true});
-        panel.on('pointerdown', () => this.closeHelp());
-        close.on('pointerdown', () => this.closeHelp());
-        this.helpObjects = [panel, title, body, close];
+        this.helpOverlay = createHelpOverlay(this, {
+            title: 'NANOTECH SHIFT',
+            lines: [
+                'UP and DOWN pick an alien’s table.',
+                '',
+                'Hold FILL to 100%, then SLIDE.',
+                'Sliding an unfilled gun costs a life.',
+                '',
+                'Stay in that lane to catch it coming back.',
+                '',
+                'Finish the quota before three mistakes.'
+            ],
+            closeLabel: 'ENTER · OPEN THE LAB',
+            accentColor: COLORS.slime,
+            titleColor: '#79ff4d',
+            bodyColor: '#eaffdf',
+            panelColor: 0x07161a,
+            viewSize: VIEW_SIZE,
+            onClose: () => this.closeHelp()
+        });
         this.publishTelemetry();
     }
 
     private closeHelp(): void {
         if (!this.helpOpen) return;
-        for (const object of this.helpObjects) object.destroy();
-        this.helpObjects = [];
+        this.helpOverlay?.destroy();
+        this.helpOverlay = null;
         this.helpOpen = false;
         this.state = setZapperPaused(this.state, false);
         this.publishTelemetry();

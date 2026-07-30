@@ -533,27 +533,28 @@ export class TumblerRelayScene extends Phaser.Scene {
         const panel = this.add.rectangle(336, 332, 528, 414, 0x20231f)
             .setStrokeStyle(3, COLORS.accent)
             .setDepth(depth + 1);
-        const title = this.add.text(336, 162, 'HOW TO CATCH THESE TUMBLERS', {
+        const title = this.add.text(336, 168, 'CATCH THE TUMBLERS', {
             color: '#efc75e',
             fontFamily: 'Georgia, serif',
             fontSize: '25px'
         }).setOrigin(0.5).setDepth(depth + 2);
-        const body = this.add.text(112, 202, [
-            '1  Each tumbler bounces up and down its track.',
-            '    They latch left to right — follow the gold NEXT marker.',
+        // Short lines at a large size so the briefing survives phone scaling.
+        const body = this.add.text(336, 300, [
+            '1  Tumblers bounce up their tracks.',
+            'They latch left to right.',
             '',
-            '2  Press CATCH (or Space) while the ring is inside',
-            '    its gold band. Latched tumblers glow cyan.',
+            '2  Press LATCH while the ring is',
+            'inside its gold band.',
             '',
-            '3  Misses wear the lever and rattle the alarm — a bad',
-            '    miss can shake the last latch loose. Latch them all,',
-            '    then tap TURN NOW.'
+            '3  Misses rattle the alarm.',
+            'All latched: TURN CAM.'
         ], {
             color: '#f5f0df',
             fontFamily: 'Georgia, serif',
-            fontSize: '17px',
-            lineSpacing: 5
-        }).setDepth(depth + 2);
+            fontSize: '22px',
+            align: 'center',
+            lineSpacing: 6
+        }).setOrigin(0.5).setDepth(depth + 2);
         const note = this.add.text(336, 452, 'Help pauses the tumblers and the alarm.', {
             color: '#b6b09f',
             fontFamily: 'Georgia, serif',

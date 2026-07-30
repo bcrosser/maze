@@ -9,6 +9,7 @@ import type {
     EncounterResult,
     OutcomeEffect
 } from '../../encounters/contracts';
+import {createHelpOverlay, type HelpOverlay} from '../help-overlay';
 import {
     getEncounterItemBonusLabel,
     getEncounterNumberModifier
@@ -26,6 +27,7 @@ import {
     type CasinoHeistDeviceKind,
     type CasinoHeistEvent,
     type CasinoHeistPickupKind,
+    type CasinoHeistRenderRoadRow,
     type CasinoHeistRenderSnapshot,
     type CasinoHeistState,
     type CasinoHeistTrafficKind
@@ -123,7 +125,7 @@ export class CasinoHeistScene extends Phaser.Scene {
     private graphics!: Phaser.GameObjects.Graphics;
     private hudText!: Phaser.GameObjects.Text;
     private messageText!: Phaser.GameObjects.Text;
-    private helpObjects: Phaser.GameObjects.GameObject[] = [];
+    private helpOverlay: HelpOverlay | null = null;
     private helpOpen = false;
     private steerLeft = false;
     private steerRight = false;
@@ -178,7 +180,6 @@ export class CasinoHeistScene extends Phaser.Scene {
             }
         );
         this.state = createCasinoHeistState(course);
-        this.helpObjects = [];
         this.helpOpen = false;
         this.steerLeft = false;
         this.steerRight = false;
@@ -420,53 +421,36 @@ export class CasinoHeistScene extends Phaser.Scene {
         this.steerRight = false;
         this.fireHeld = false;
         this.state = setCasinoHeistPaused(this.state, true);
-        const panel = this.add.rectangle(VIEW_SIZE / 2, VIEW_SIZE / 2, 592, 420, 0x090b18, 0.99)
-            .setStrokeStyle(4, COLORS.casino)
-            .setDepth(100)
-            .setInteractive({useHandCursor: true});
-        const title = this.add.text(VIEW_SIZE / 2, 148, 'GETAWAY DRIVER BRIEFING', {
-            color: '#ff76d2',
-            fontFamily: 'Georgia, serif',
-            fontSize: '25px',
-            fontStyle: 'bold'
-        }).setOrigin(0.5).setDepth(101);
-        const body = this.add.text(VIEW_SIZE / 2, 322,
-            'The casino is behind you and the money is in the boot. Get away clean.\n\n' +
-            'Steer with the pad, and drive UP or DOWN the road to close on traffic or hang back from it. ' +
-            'Ordinary cars, buses, trucks and bikes are all slower than you — go around them, and mind the dividers where the road splits.\n\n' +
-            'Cop cars and SWAT vans ram you toward the verge and shoot from a rolled-down window. ' +
-            'They cannot drive through traffic either: let them pile into a bus.\n\n' +
-            'The car starts with NO WEAPON. Collect the violet gun, green ammo, and the OIL SLICK, SMOKE and FLAME devices. ' +
-            'SWITCH arms the next device, DEPLOY spends it.\n\n' +
-            'Police helicopters hold station ahead and drop a partial spike strip — dodge it, or shoot the chopper down.\n\n' +
-            'Watch for the marked TURN-OFF and drop into the storm drain to vanish with $1,000. Drive past it and the road runs out.',
-            {
-                color: '#f7f1da',
-                fontFamily: 'Georgia, serif',
-                fontSize: '16px',
-                align: 'center',
-                lineSpacing: 4,
-                wordWrap: {width: 520, useAdvancedWrap: true}
-            }
-        ).setOrigin(0.5).setDepth(101);
-        const close = this.add.text(VIEW_SIZE / 2, 510, 'ENTER · START THE GETAWAY', {
-            color: '#090b18',
-            backgroundColor: '#ff76d2',
-            fontFamily: 'Georgia, serif',
-            fontSize: '17px',
-            fontStyle: 'bold',
-            padding: {x: 18, y: 10}
-        }).setOrigin(0.5).setDepth(101).setInteractive({useHandCursor: true});
-        panel.on('pointerdown', () => this.closeHelp());
-        close.on('pointerdown', () => this.closeHelp());
-        this.helpObjects = [panel, title, body, close];
+        this.helpOverlay = createHelpOverlay(this, {
+            title: 'GETAWAY DRIVER',
+            lines: [
+                'You robbed the casino. Now vanish.',
+                '',
+                'Steer anywhere on the road. UP and DOWN',
+                'close on traffic or hang back.',
+                '',
+                'Shoot any car. Trucks and buses take two.',
+                'Police ram you — let them hit traffic.',
+                '',
+                'DEPLOY spends a device, SWITCH changes it.',
+                '',
+                'Take the marked TURN-OFF into the drain.'
+            ],
+            closeLabel: 'ENTER · DRIVE',
+            accentColor: COLORS.casino,
+            titleColor: '#ff76d2',
+            bodyColor: '#f7f1da',
+            panelColor: 0x090b18,
+            viewSize: VIEW_SIZE,
+            onClose: () => this.closeHelp()
+        });
         this.publishTelemetry();
     }
 
     private closeHelp(): void {
         if (!this.helpOpen) return;
-        for (const object of this.helpObjects) object.destroy();
-        this.helpObjects = [];
+        this.helpOverlay?.destroy();
+        this.helpOverlay = null;
         this.helpOpen = false;
         this.state = setCasinoHeistPaused(this.state, false);
         this.publishTelemetry();
@@ -531,6 +515,11 @@ export class CasinoHeistScene extends Phaser.Scene {
                     this.messageText.setText('TURN-OFF AHEAD · LINE UP ON THE STORM DRAIN');
                     break;
                 case 'traffic-spawned':
+                    break;
+                case 'traffic-wrecked':
+                    this.messageText.setText(
+                        `${event.kindLabel.toUpperCase()} WRECKED · IT IS SLIDING OFF THE ROAD`
+                    );
                     break;
                 case 'success':
                     this.messageText.setText(
@@ -601,7 +590,9 @@ export class CasinoHeistScene extends Phaser.Scene {
                 vehicle.kind,
                 x(vehicle.width),
                 vehicle.length,
-                vehicle.wrecked
+                vehicle.wrecked,
+                vehicle.damaged,
+                vehicle.spin
             );
         }
         for (const pursuer of snapshot.pursuers) {
@@ -652,48 +643,94 @@ export class CasinoHeistScene extends Phaser.Scene {
         }
     }
 
+    /**
+     * The road is one continuous ribbon stitched from the sampled rows the model
+     * hands over, so its turns, its changes of width and the medians it divides
+     * around all read as smooth rather than as a chain of straight panels.
+     */
     private drawRoad(
         graphics: Phaser.GameObjects.Graphics,
         snapshot: CasinoHeistRenderSnapshot
     ): void {
-        const sorted = [...snapshot.road].sort((left, right) => left.farY - right.farY);
-        for (const segment of sorted) {
-            const halfWidth = x(segment.width) / 2;
-            const nearCenter = x(segment.nearCenterX);
-            const farCenter = x(segment.farCenterX);
-            const points = [
-                new Phaser.Math.Vector2(farCenter - halfWidth, segment.farY),
-                new Phaser.Math.Vector2(farCenter + halfWidth, segment.farY),
-                new Phaser.Math.Vector2(nearCenter + halfWidth, segment.nearY),
-                new Phaser.Math.Vector2(nearCenter - halfWidth, segment.nearY)
-            ];
-            graphics.fillStyle(
-                segment.segmentIndex % 2 === 0 ? COLORS.road : COLORS.roadAlternate
-            );
-            graphics.fillPoints(points, true);
-            graphics.lineStyle(7, COLORS.shoulder, 0.95);
-            graphics.lineBetween(
-                farCenter - halfWidth,
-                segment.farY,
-                nearCenter - halfWidth,
-                segment.nearY
-            );
-            graphics.lineBetween(
-                farCenter + halfWidth,
-                segment.farY,
-                nearCenter + halfWidth,
-                segment.nearY
-            );
-            graphics.lineStyle(2, COLORS.paper, 0.65);
-            for (const laneFraction of [-1 / 6, 1 / 6]) {
-                const offset = x(segment.width) * laneFraction;
-                graphics.lineBetween(
-                    farCenter + offset,
-                    segment.farY,
-                    nearCenter + offset,
-                    segment.nearY
-                );
+        const rows = snapshot.road;
+        if (rows.length < 2) return;
+
+        // Tarmac: one polygon down the left edge and back up the right.
+        const outline: Phaser.Math.Vector2[] = [];
+        for (const row of rows) outline.push(new Phaser.Math.Vector2(x(row.leftX), row.y));
+        for (let index = rows.length - 1; index >= 0; index--) {
+            const row = rows[index]!;
+            outline.push(new Phaser.Math.Vector2(x(row.rightX), row.y));
+        }
+        graphics.fillStyle(COLORS.road);
+        graphics.fillPoints(outline, true);
+
+        // Dashed lane lines, then the solid line or median down the middle.
+        graphics.lineStyle(3, COLORS.paper, 0.5);
+        for (const offset of snapshot.laneMarkOffsets) {
+            for (const side of [-1, 1]) {
+                this.strokeRoadLine(graphics, rows, row =>
+                    row.centerX + side * (row.dividerHalfWidth + offset), true);
             }
+        }
+        graphics.lineStyle(3, COLORS.lane, 0.75);
+        this.strokeRoadLine(
+            graphics,
+            rows.filter(row => row.dividerHalfWidth <= 0),
+            row => row.centerX,
+            true
+        );
+        graphics.lineStyle(6, COLORS.shoulder, 0.95);
+        this.strokeRoadLine(graphics, rows, row => row.leftX, false);
+        this.strokeRoadLine(graphics, rows, row => row.rightX, false);
+        this.drawMedian(graphics, rows);
+    }
+
+    /**
+     * Draws one line following the road. Dashed lines break on world distance
+     * rather than on screen position, so the dashes stream past with the road.
+     */
+    private strokeRoadLine(
+        graphics: Phaser.GameObjects.Graphics,
+        rows: readonly CasinoHeistRenderRoadRow[],
+        at: (row: CasinoHeistRenderRoadRow) => number,
+        dashed: boolean
+    ): void {
+        for (let index = 1; index < rows.length; index++) {
+            const previous = rows[index - 1]!;
+            const row = rows[index]!;
+            if (Math.abs(previous.distance - row.distance) > 40) continue;
+            if (dashed && Math.floor(row.distance / 44) % 2 !== 0) continue;
+            graphics.lineBetween(x(at(previous)), previous.y, x(at(row)), row.y);
+        }
+    }
+
+    /** The raised median of a split, tapering in and out with the road. */
+    private drawMedian(
+        graphics: Phaser.GameObjects.Graphics,
+        rows: readonly CasinoHeistRenderRoadRow[]
+    ): void {
+        const split = rows.filter(row => row.dividerHalfWidth > 0.5);
+        if (split.length < 2) return;
+        const outline: Phaser.Math.Vector2[] = [];
+        for (const row of split) {
+            outline.push(new Phaser.Math.Vector2(x(row.centerX - row.dividerHalfWidth), row.y));
+        }
+        for (let index = split.length - 1; index >= 0; index--) {
+            const row = split[index]!;
+            outline.push(new Phaser.Math.Vector2(x(row.centerX + row.dividerHalfWidth), row.y));
+        }
+        graphics.fillStyle(COLORS.city);
+        graphics.fillPoints(outline, true);
+        graphics.lineStyle(3, COLORS.warning, 0.8);
+        this.strokeRoadLine(graphics, split, row => row.centerX - row.dividerHalfWidth, false);
+        this.strokeRoadLine(graphics, split, row => row.centerX + row.dividerHalfWidth, false);
+        // Hazard stripes up the barrier so a median reads as solid at a glance.
+        graphics.fillStyle(COLORS.paper, 0.75);
+        for (const row of split) {
+            if (Math.floor(row.distance / 34) % 2 !== 0) continue;
+            const half = x(row.dividerHalfWidth);
+            graphics.fillRect(x(row.centerX) - half, row.y - 2, half * 2, 4);
         }
     }
 
@@ -754,10 +791,18 @@ export class CasinoHeistScene extends Phaser.Scene {
         kind: CasinoHeistTrafficKind,
         width: number,
         length: number,
-        wrecked: boolean
+        wrecked: boolean,
+        damaged: boolean,
+        spin: number
     ): void {
         const palette = TRAFFIC_COLORS[kind];
-        const body = wrecked ? 0x5c5852 : palette.body;
+        if (wrecked) {
+            this.drawWreck(graphics, xPosition, yPosition, width, length, spin, palette.body);
+            return;
+        }
+        const body = damaged
+            ? Phaser.Display.Color.ValueToColor(palette.body).darken(38).color
+            : palette.body;
         graphics.fillStyle(COLORS.ink, 0.5);
         graphics.fillRoundedRect(
             xPosition - width / 2 - 3,
@@ -828,21 +873,68 @@ export class CasinoHeistScene extends Phaser.Scene {
                 );
             }
         }
-        if (wrecked) {
-            graphics.lineStyle(3, COLORS.danger, 0.9);
-            graphics.lineBetween(
-                xPosition - width / 2,
-                yPosition - length / 2,
-                xPosition + width / 2,
-                yPosition + length / 2
-            );
-            graphics.lineBetween(
-                xPosition + width / 2,
-                yPosition - length / 2,
-                xPosition - width / 2,
-                yPosition + length / 2
+    }
+
+    /**
+     * A wreck slewing off the road: the shell tumbles about its own centre while
+     * the model slides it clear, trailing smoke and shedding sparks. Graphics has
+     * no transform of its own here, so the body is drawn as a rotated quad.
+     */
+    private drawWreck(
+        graphics: Phaser.GameObjects.Graphics,
+        xPosition: number,
+        yPosition: number,
+        width: number,
+        length: number,
+        spin: number,
+        bodyColor: number
+    ): void {
+        const corners = (inset: number): Phaser.Math.Vector2[] => {
+            const halfWidth = width / 2 - inset;
+            const halfLength = length / 2 - inset;
+            const cos = Math.cos(spin);
+            const sin = Math.sin(spin);
+            return [
+                [-halfWidth, -halfLength],
+                [halfWidth, -halfLength],
+                [halfWidth, halfLength],
+                [-halfWidth, halfLength]
+            ].map(([offsetX, offsetY]) => new Phaser.Math.Vector2(
+                xPosition + offsetX! * cos - offsetY! * sin,
+                yPosition + offsetX! * sin + offsetY! * cos
+            ));
+        };
+        // Smoke pours off in the direction it is sliding.
+        const drift = Math.sign(spin) || 1;
+        graphics.fillStyle(0x6f7681, 0.32);
+        for (let puff = 1; puff <= 3; puff++) {
+            const wobble = Math.sin(this.animationClockMs / 90 + puff) * 6;
+            graphics.fillCircle(
+                xPosition - drift * puff * 13 + wobble,
+                yPosition + puff * 9,
+                8 + puff * 3
             );
         }
+        graphics.fillStyle(COLORS.ink, 0.5);
+        graphics.fillPoints(corners(-3), true);
+        graphics.fillStyle(Phaser.Display.Color.ValueToColor(bodyColor).darken(52).color);
+        graphics.fillPoints(corners(0), true);
+        graphics.fillStyle(0x2a2622);
+        graphics.fillPoints(corners(6), true);
+        // Sparks where the bodywork is grinding along the road.
+        graphics.fillStyle(COLORS.warning, 0.9);
+        for (let spark = 0; spark < 3; spark++) {
+            const phase = (this.animationClockMs / 40 + spark * 2.1) % 6;
+            graphics.fillCircle(
+                xPosition + drift * (10 + phase * 7),
+                yPosition + Math.sin(phase * 2) * 12,
+                Math.max(1, 3 - phase * 0.4)
+            );
+        }
+        graphics.lineStyle(3, COLORS.danger, 0.85);
+        const cross = corners(4);
+        graphics.lineBetween(cross[0]!.x, cross[0]!.y, cross[2]!.x, cross[2]!.y);
+        graphics.lineBetween(cross[1]!.x, cross[1]!.y, cross[3]!.x, cross[3]!.y);
     }
 
     private drawPursuer(
@@ -854,6 +946,18 @@ export class CasinoHeistScene extends Phaser.Scene {
         const swat = pursuer.kind === 'swat-van';
         const width = swat ? 48 : 42;
         const length = swat ? 88 : 72;
+        if (pursuer.wrecked) {
+            this.drawWreck(
+                graphics,
+                xPosition,
+                yPosition,
+                width,
+                length,
+                pursuer.spin,
+                swat ? 0x2b3138 : 0x30363d
+            );
+            return;
+        }
         graphics.fillStyle(COLORS.ink, 0.55);
         graphics.fillRoundedRect(
             xPosition - width / 2 - 3,
@@ -1100,6 +1204,7 @@ export class CasinoHeistScene extends Phaser.Scene {
         canvas.dataset.heistPursuersDestroyed =
             String(this.state.telemetry.pursuersDestroyed);
         canvas.dataset.heistPursuersWrecked = String(this.state.telemetry.pursuersWrecked);
+        canvas.dataset.heistTrafficWrecked = String(this.state.telemetry.trafficWrecked);
         canvas.dataset.heistHelicoptersDowned =
             String(this.state.telemetry.helicoptersDowned);
         canvas.dataset.heistDevicesUsed = String(this.state.telemetry.devicesUsed);

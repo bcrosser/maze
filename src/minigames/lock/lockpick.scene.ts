@@ -789,26 +789,29 @@ export class LockpickScene extends Phaser.Scene {
         const panel = this.add.rectangle(336, 332, 528, 414, 0x20231f)
             .setStrokeStyle(3, COLORS.accent)
             .setDepth(depth + 1);
-        const title = this.add.text(336, 162, 'HOW TO READ THIS LOCK', {
+        const title = this.add.text(336, 168, 'HOW TO READ THIS LOCK', {
             color: '#efc75e',
             fontFamily: 'Georgia, serif',
             fontSize: '25px'
         }).setOrigin(0.5).setDepth(depth + 2);
-        const body = this.add.text(112, 202, [
-            '1  Set the wrench inside the working band.',
-            '    The sweet spot DRIFTS after every set pin — re-seat it.',
+        // Short lines at a large size: the canvas scales down on a phone, so a
+        // 17px briefing arrives at roughly 10 CSS px and cannot be read.
+        const body = this.add.text(336, 300, [
+            '1  Keep tension inside the band.',
+            'It drifts after every set pin.',
             '',
-            '2  Follow the gold NEXT marker.',
-            '    The binding pin trembles and is selected automatically.',
+            '2  Work the gold NEXT pin.',
+            'It is chosen for you.',
             '',
-            '3  Lift its seam to the gold line.',
-            '    Release to set it. When all are cyan, tap TURN NOW.'
+            '3  Lift its seam to the gold line,',
+            'then release. All cyan: TURN NOW.'
         ], {
             color: '#f5f0df',
             fontFamily: 'Georgia, serif',
-            fontSize: '17px',
-            lineSpacing: 5
-        }).setDepth(depth + 2);
+            fontSize: '22px',
+            align: 'center',
+            lineSpacing: 6
+        }).setOrigin(0.5).setDepth(depth + 2);
         const note = this.add.text(336, 428, 'Help pauses the alarm.', {
             color: '#b6b09f',
             fontFamily: 'Georgia, serif',

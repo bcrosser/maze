@@ -6,6 +6,7 @@ import {
     type ControlEvent
 } from '../../app/control-scheme';
 import {drawHorse} from '../../content/horse-art';
+import {createHelpOverlay, type HelpOverlay} from '../help-overlay';
 import {Mulberry32Random} from '../../domain/random/random-source';
 import type {
     EncounterContext,
@@ -131,7 +132,7 @@ export class HorsemasterScene extends Phaser.Scene {
     private graphics!: Phaser.GameObjects.Graphics;
     private hudText!: Phaser.GameObjects.Text;
     private messageText!: Phaser.GameObjects.Text;
-    private helpObjects: Phaser.GameObjects.GameObject[] = [];
+    private helpOverlay: HelpOverlay | null = null;
     private helpOpen = false;
     private pendingHorizontal: -1 | 0 | 1 = 0;
     private pendingVertical: -1 | 0 | 1 = 0;
@@ -163,7 +164,6 @@ export class HorsemasterScene extends Phaser.Scene {
         this.animationClockMs = 0;
         this.finishing = false;
         this.finishTimer = null;
-        this.helpObjects = [];
         this.helpOpen = false;
 
         this.cameras.main.setBackgroundColor(COLORS.sky);
@@ -364,60 +364,36 @@ export class HorsemasterScene extends Phaser.Scene {
         this.pendingHorizontal = 0;
         this.pendingVertical = 0;
         this.state = setHorsemasterPaused(this.state, true);
-        const panel = this.add.rectangle(
-            VIEW_SIZE / 2,
-            VIEW_SIZE / 2,
-            584,
-            374,
-            0x151a21,
-            0.98
-        ).setStrokeStyle(4, COLORS.gymLight).setDepth(100)
-            .setInteractive({useHandCursor: true});
-        const title = this.add.text(VIEW_SIZE / 2, 194, 'HOW TO BECOME HORSEMASTER', {
-            color: '#ffd66b',
-            fontFamily: 'Georgia, serif',
-            fontSize: '24px',
-            fontStyle: 'bold'
-        }).setOrigin(0.5).setDepth(101);
-        const body = this.add.text(VIEW_SIZE / 2, 332,
-            'ARROWS / WASD hop one tile. SPACE also hops forward.\n\n' +
-            'Cross the bike road on hoof: rider colors show speed — GREEN is ' +
-            'slow, YELLOW quicker, RED fastest. The median is safe ground.\n\n' +
-            'On the far road you must RIDE: leap onto any truck and the horse ' +
-            'settles onto the nearest machine in its bed. GREEN flatbeds are ' +
-            'slow with TWO machines, YELLOW pickups carry one, RED pickups are ' +
-            'fast. Ride off the screen edge and you lose a heart.\n\n' +
-            'DOWN hops BACK a lane, even mid-ride, so a machine heading for ' +
-            'the edge is escapable — but the landing must still find a ' +
-            'machine, or the median.\n\n' +
-            'Finish through the glowing door of the one true GYM.',
-            {
-                color: '#fff7df',
-                fontFamily: 'Georgia, serif',
-                fontSize: '16px',
-                align: 'center',
-                lineSpacing: 3,
-                wordWrap: {width: 530, useAdvancedWrap: true}
-            }
-        ).setOrigin(0.5).setDepth(101);
-        const close = this.add.text(VIEW_SIZE / 2, 484, 'ENTER · START HOPPING', {
-            color: '#fff7df',
-            backgroundColor: '#51358f',
-            fontFamily: 'Georgia, serif',
-            fontSize: '18px',
-            padding: {x: 18, y: 11}
-        }).setOrigin(0.5).setDepth(101).setInteractive({useHandCursor: true});
-        const closeHelp = (): void => this.closeHelp();
-        panel.on('pointerdown', closeHelp);
-        close.on('pointerdown', closeHelp);
-        this.helpObjects = [panel, title, body, close];
+        this.helpOverlay = createHelpOverlay(this, {
+            title: 'BECOME HORSEMASTER',
+            lines: [
+                'Hop one tile with the pad or arrows.',
+                '',
+                'Dodge the bikes. The median is safe.',
+                '',
+                'Past it you must RIDE: land on a truck',
+                'and the horse takes a machine.',
+                '',
+                'DOWN hops back a lane, even mid-ride.',
+                'Riding off the screen edge costs a heart.',
+                '',
+                'Finish through the glowing GYM door.'
+            ],
+            closeLabel: 'ENTER · HOP',
+            accentColor: COLORS.gymLight,
+            titleColor: '#ffd66b',
+            bodyColor: '#fff7df',
+            panelColor: 0x151a21,
+            viewSize: VIEW_SIZE,
+            onClose: () => this.closeHelp()
+        });
         this.publishTelemetry();
     }
 
     private closeHelp(): void {
         if (!this.helpOpen) return;
-        for (const object of this.helpObjects) object.destroy();
-        this.helpObjects = [];
+        this.helpOverlay?.destroy();
+        this.helpOverlay = null;
         this.helpOpen = false;
         this.pendingHorizontal = 0;
         this.pendingVertical = 0;

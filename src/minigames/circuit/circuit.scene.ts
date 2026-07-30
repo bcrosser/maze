@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 
 import {getControlDeck} from '../../app/control-deck-host';
 import {CIRCUIT_CONTROL_SCHEME, type ControlEvent} from '../../app/control-scheme';
+import {createHelpOverlay, type HelpOverlay} from '../help-overlay';
 import type {PerformanceGrade} from '../../domain/campaign/campaign-state';
 import {Mulberry32Random} from '../../domain/random/random-source';
 import type {
@@ -131,16 +132,19 @@ const PCB_PATTERNS: Readonly<Record<CircuitColor, PcbPattern>> = Object.freeze({
     }
 });
 
-const HELP_BODY =
-    'CLEAR EVERY SHORT CIRCUIT BEFORE MOVES RUN OUT\n\n' +
-    'Tap two neighboring boards to swap them. Match 3 or more of one color. ' +
-    'Only a match uses a move; an invalid swap snaps back for free.\n\n' +
-    'Sparking shorts ride their board — when it swaps or falls, the short ' +
-    'moves with it. Match or blast a shorted board to repair it. ' +
-    'Repair every short to win.\n\n' +
-    'Long and crossing matches forge beam, burst, and spectrum boards. ' +
-    'Swap a special to discharge it.\n\n' +
-    'BOOSTERS: hover over each one for details, or press 1–4.';
+const HELP_LINES: readonly string[] = Object.freeze([
+    'Repair every sparking short',
+    'before the moves run out.',
+    '',
+    'Swap two neighbours to match 3 or more.',
+    'Only a real match spends a move.',
+    '',
+    'A short rides its board. Match that board',
+    'to repair it.',
+    '',
+    'Long matches forge special boards.',
+    'Boosters are 1–4, or the deck buttons.'
+]);
 
 type FinishStatus = 'success' | 'failure' | 'abandoned';
 type BoosterKey = 'extra' | 'hint' | 'pulse' | 'shuffle';
@@ -256,6 +260,7 @@ export class CircuitCrashScene extends Phaser.Scene {
     private tooltipText!: Phaser.GameObjects.Text;
     private boosterTexts = new Map<BoosterKey, Phaser.GameObjects.Text>();
     private helpObjects: Phaser.GameObjects.GameObject[] = [];
+    private helpOverlay: HelpOverlay | null = null;
     private selectedIndex: number | null = null;
     private cursorIndex = 0;
     private pulseTargeting = false;
@@ -1551,47 +1556,28 @@ export class CircuitCrashScene extends Phaser.Scene {
             0x02070a,
             0.8
         ).setDepth(depth).setInteractive();
-        const panel = this.add.rectangle(
-            VIEW_SIZE / 2,
-            VIEW_SIZE / 2,
-            586,
-            478,
-            0x10212b,
-            0.99
-        ).setStrokeStyle(4, COLORS.accent).setDepth(depth + 1)
-            .setInteractive({useHandCursor: true});
-        const title = this.add.text(VIEW_SIZE / 2, 132, 'HOW TO CRASH A CIRCUIT', {
-            color: '#72f4df',
-            fontFamily: 'Georgia, serif',
-            fontSize: '25px',
-            fontStyle: 'bold'
-        }).setOrigin(0.5).setDepth(depth + 2);
-        const body = this.add.text(VIEW_SIZE / 2, 338, HELP_BODY, {
-            color: '#e8fbff',
-            fontFamily: 'Georgia, serif',
-            fontSize: '16px',
-            align: 'center',
-            lineSpacing: 3,
-            wordWrap: {width: 522, useAdvancedWrap: true}
-        }).setOrigin(0.5).setDepth(depth + 2);
-        const close = this.add.text(VIEW_SIZE / 2, 548, 'TAP OR ENTER · POWER ON', {
-            color: '#07131c',
-            backgroundColor: '#72f4df',
-            fontFamily: 'Georgia, serif',
-            fontSize: '17px',
-            fontStyle: 'bold',
-            padding: {x: 18, y: 10}
-        }).setOrigin(0.5).setDepth(depth + 2).setInteractive({useHandCursor: true});
         const closeHelp = (): void => this.closeHelp();
         shade.on('pointerdown', closeHelp);
-        panel.on('pointerdown', closeHelp);
-        close.on('pointerdown', closeHelp);
-        this.helpObjects = [shade, panel, title, body, close];
+        this.helpOverlay = createHelpOverlay(this, {
+            title: 'CRASH THE CIRCUIT',
+            lines: HELP_LINES,
+            closeLabel: 'TAP OR ENTER · POWER ON',
+            accentColor: COLORS.accent,
+            titleColor: '#72f4df',
+            bodyColor: '#e8fbff',
+            closeTextColor: '#07131c',
+            panelColor: 0x10212b,
+            viewSize: VIEW_SIZE,
+            onClose: closeHelp
+        });
+        this.helpObjects = [shade, ...this.helpOverlay.objects];
         this.publishTelemetry();
     }
 
     private closeHelp(): void {
         if (!this.helpOpen) return;
+        this.helpOverlay?.destroy();
+        this.helpOverlay = null;
         for (const object of this.helpObjects) object.destroy();
         this.helpObjects = [];
         this.helpOpen = false;
