@@ -1,6 +1,7 @@
 import type {CampaignState, EncounterKind} from '../campaign/campaign-state';
 import {Mulberry32Random, shuffle} from '../random/random-source';
 import {deriveSeed} from '../random/seed-derivation';
+import {getPassageDistances} from './maze-distances';
 import type {Coordinate} from './maze-types';
 
 export const OBJECTIVE_IDS = [
@@ -240,6 +241,76 @@ export function getCurrentObjective(state: CampaignState): ObjectiveDefinition |
         }
     }
     return null;
+}
+
+/**
+ * Placements the player could walk to and start right now. Locked objectives
+ * are excluded: sending someone to a door they cannot open is worse guidance
+ * than pointing them at whatever unlocks it.
+ */
+export function getSelectableObjectives(
+    state: CampaignState
+): readonly LevelObjectivePlacement[] {
+    return state.overworld.objectives.filter(placement =>
+        getObjectiveStatus(state.flags, placement.objectiveId) === 'available'
+    );
+}
+
+/**
+ * The nearest incomplete objective by walkable distance. Ties break on roster
+ * order so the choice is stable across identical saves, and an unreachable
+ * objective sorts last rather than being dropped.
+ */
+export function getClosestObjective(state: CampaignState): ObjectiveDefinition | null {
+    const selectable = getSelectableObjectives(state);
+    if (selectable.length === 0) return null;
+    const distances = getPassageDistances(
+        state.overworld.maze,
+        state.overworld.playerPosition
+    );
+    const nearest = selectable
+        .map((placement, index) => ({
+            placement,
+            index,
+            distance: distances.get(
+                `${placement.position.x},${placement.position.y}`
+            ) ?? Number.POSITIVE_INFINITY
+        }))
+        .sort((left, right) =>
+            left.distance - right.distance || left.index - right.index
+        )[0];
+    return nearest ? OBJECTIVE_BY_ID[nearest.placement.objectiveId] : null;
+}
+
+/**
+ * The objective the HUD is tracking: the player's pinned choice while it is
+ * still completable, otherwise the closest one.
+ */
+export function getTrackedObjective(state: CampaignState): ObjectiveDefinition | null {
+    const selected = state.overworld.selectedObjectiveId;
+    if (selected !== null) {
+        const stillSelectable = getSelectableObjectives(state).some(placement =>
+            placement.objectiveId === selected
+        );
+        if (stillSelectable) return OBJECTIVE_BY_ID[selected];
+    }
+    return getClosestObjective(state);
+}
+
+/**
+ * The next objective to track. Cycling walks the level's incomplete roster in
+ * order and wraps, so a player holding a Compass can point it at whichever
+ * objective they actually want.
+ */
+export function getNextTrackedObjectiveId(state: CampaignState): ObjectiveId | null {
+    const selectable = getSelectableObjectives(state);
+    if (selectable.length === 0) return null;
+    const current = getTrackedObjective(state)?.id ?? null;
+    const currentIndex = selectable.findIndex(placement =>
+        placement.objectiveId === current
+    );
+    const next = selectable[(currentIndex + 1) % selectable.length];
+    return next?.objectiveId ?? null;
 }
 
 export function getObjectivePlacement(

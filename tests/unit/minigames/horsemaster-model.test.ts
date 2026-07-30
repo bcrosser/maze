@@ -923,6 +923,58 @@ describe('Horsemaster deterministic stepping and rendering', () => {
         }
     });
 
+    it('hops backwards from the first vehicle lane onto the safe median', () => {
+        const course = createHorsemasterCourse(new Mulberry32Random(4_242));
+        const state = placeOnRow(createHorsemasterState(course), 7, 5);
+
+        const retreated = advanceHorsemaster(state, DOWN, HORSEMASTER_HOP_DURATION_MS).state;
+
+        expect(retreated.player.row).toBe(6);
+        expect(retreated.player.lives).toBe(state.player.lives);
+        expect(retreated.player.ride).toBeNull();
+        expect(retreated.status).toBe('active');
+    });
+
+    it('lets a rider abandon a machine and hop back to the lane behind', () => {
+        const course = createHorsemasterCourse(new Mulberry32Random(7_777));
+        const lane = laneOfTier(course, 'green');
+        const vehicle = lane.vehicles[0]!;
+        const base = createHorsemasterState(course);
+        const ridingRow = lane.row;
+        const riding = placeOnRide(base, vehicle.id, 0);
+        expect(riding.player.ride).not.toBeNull();
+        expect(ridingRow).toBeGreaterThan(6);
+
+        const retreating = advanceHorsemaster(riding, DOWN, HORSEMASTER_FIXED_STEP_MS).state;
+
+        // The hop commits immediately and drops the ride at takeoff.
+        expect(retreating.player.jump?.targetRow).toBe(ridingRow - 1);
+        expect(retreating.player.jump?.hop).toBe('vehicle');
+        expect(retreating.player.ride).toBeNull();
+    });
+
+    it('freezes the backward landing column at takeoff like a forward hop', () => {
+        const course = createHorsemasterCourse(new Mulberry32Random(1_234));
+        const state = placeOnRow(createHorsemasterState(course), 8, 4);
+
+        const airborne = advanceHorsemaster(state, DOWN, HORSEMASTER_FIXED_STEP_MS).state;
+
+        expect(airborne.player.jump?.targetX).toBe(state.player.x);
+        expect(airborne.player.jump?.targetRow).toBe(7);
+    });
+
+    it('never hops backwards off the starting kerb', () => {
+        const course = createHorsemasterCourse(new Mulberry32Random(99));
+        const state = createHorsemasterState(course);
+        expect(state.player.row).toBe(0);
+
+        const attempted = advanceHorsemaster(state, DOWN, HORSEMASTER_HOP_DURATION_MS).state;
+
+        expect(attempted.player.row).toBe(0);
+        expect(attempted.player.jump).toBeNull();
+        expect(attempted.player.lives).toBe(state.player.lives);
+    });
+
     it('rejects invalid frame deltas', () => {
         const state = createHorsemasterState(
             createHorsemasterCourse(new Mulberry32Random(1))

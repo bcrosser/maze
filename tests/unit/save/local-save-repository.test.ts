@@ -1,6 +1,8 @@
 import {describe, expect, it} from 'vitest';
 
 import {
+    BASE_BACKPACK_CAPACITY,
+    CAMPAIGN_SCHEMA_VERSION,
     createInitialCampaignState,
     STARTING_MONEY,
     type CampaignState
@@ -22,6 +24,7 @@ import {getPassageDistances} from '../../../src/domain/overworld/objective-place
 import {Mulberry32Random} from '../../../src/domain/random/random-source';
 import {
     LocalSaveRepository,
+    SAVE_FORMAT_VERSION,
     SaveDataError,
     type StorageLike
 } from '../../../src/save/local-save-repository';
@@ -89,11 +92,17 @@ function createPreExpansionCampaign(
     };
 }
 
+/**
+ * Rewrites a current campaign as a genuine format-v4 payload by dropping the
+ * fields version 5 introduced, so the migration path is what gets exercised.
+ */
 function formatFourEnvelope(state: CampaignState): string {
+    const {backpackCapacity: _capacity, ...player} = state.player;
+    const {selectedObjectiveId: _selected, ...overworld} = state.overworld;
     return JSON.stringify({
         formatVersion: 4,
         savedAt: '2026-07-23T14:30:00.000Z',
-        state
+        state: {...state, schemaVersion: 4, player, overworld}
     });
 }
 
@@ -168,7 +177,7 @@ describe('LocalSaveRepository', () => {
         expect(loaded?.state).toEqual(campaign);
     });
 
-    it('loads and round-trips format-v4 level 4/5/6 pre-expansion rosters verbatim', () => {
+    it('migrates format-v4 level 4/5/6 pre-expansion rosters without regenerating them', () => {
         const storage = new MemoryStorage();
         const repository = new LocalSaveRepository(storage);
         const slots = ['slot-1', 'slot-2', 'slot-3'] as const;
@@ -180,14 +189,17 @@ describe('LocalSaveRepository', () => {
             storage.values.set(`maze:campaign:${slot}`, serialized);
             const loaded = repository.load(slot);
 
-            expect(loaded?.formatVersion).toBe(4);
+            expect(loaded?.formatVersion).toBe(SAVE_FORMAT_VERSION);
             expect(loaded?.state).toEqual(legacyState);
+            expect(loaded?.state.player.backpackCapacity).toBe(BASE_BACKPACK_CAPACITY);
+            expect(loaded?.state.overworld.selectedObjectiveId).toBeNull();
             expect(loaded?.state.overworld.levelId).toBe(`level-${levelNumber}`);
             expect(loaded?.state.overworld.objectives.map(objective => objective.objectiveId))
                 .toEqual(PRE_EXPANSION_OBJECTIVE_IDS.slice(0, levelNumber));
             expect(getLevelExitStatus(loaded!.state).total).toBe(levelNumber);
             expect(initializeLevelContent(loaded!.state)).toBe(loaded!.state);
-            expect(storage.values.get(`maze:campaign:${slot}`)).toBe(serialized);
+            // A migrated slot is rewritten in place, upgraded but not regenerated.
+            expect(storage.values.get(`maze:campaign:${slot}`)).not.toBe(serialized);
 
             const exported = repository.exportSlot(slot)!;
             const roundTripped = repository.importSlot(slot, exported);
@@ -281,7 +293,8 @@ describe('LocalSaveRepository', () => {
         const repository = new LocalSaveRepository(new MemoryStorage());
         repository.save('slot-1', createCampaign());
 
-        expect(repository.exportSlot('slot-1')).toContain('"formatVersion": 4');
+        expect(repository.exportSlot('slot-1'))
+            .toContain(`"formatVersion": ${SAVE_FORMAT_VERSION}`);
         repository.clear('slot-1');
         expect(repository.load('slot-1')).toBeNull();
         expect(repository.exportSlot('slot-1')).toBeNull();
@@ -348,8 +361,16 @@ describe('LocalSaveRepository', () => {
         const storage = new MemoryStorage();
         const repository = new LocalSaveRepository(storage);
         const current = createCampaign(31415);
-        const {money: _money, ...player} = current.player;
-        const {serviceSites: _serviceSites, ...overworld} = current.overworld;
+        const {
+            money: _money,
+            backpackCapacity: _capacity,
+            ...player
+        } = current.player;
+        const {
+            serviceSites: _serviceSites,
+            selectedObjectiveId: _selected,
+            ...overworld
+        } = current.overworld;
         const versionTwoEnvelope = {
             formatVersion: 2,
             savedAt: '2026-07-23T14:30:00.000Z',
@@ -363,14 +384,17 @@ describe('LocalSaveRepository', () => {
 
         const migrated = repository.importSlot('slot-1', JSON.stringify(versionTwoEnvelope));
 
-        expect(migrated.formatVersion).toBe(4);
-        expect(migrated.state.schemaVersion).toBe(4);
+        expect(migrated.formatVersion).toBe(SAVE_FORMAT_VERSION);
+        expect(migrated.state.schemaVersion).toBe(CAMPAIGN_SCHEMA_VERSION);
         expect(migrated.state.player.money).toBe(STARTING_MONEY);
+        expect(migrated.state.player.backpackCapacity).toBe(BASE_BACKPACK_CAPACITY);
         expect(migrated.state.overworld.serviceSites).toEqual([]);
+        expect(migrated.state.overworld.selectedObjectiveId).toBeNull();
         expect(migrated.state.overworld.reinforcementOrdinal).toBe(0);
         expect(migrated.state.overworld.reinforcementCountdownMs)
             .toBeGreaterThanOrEqual(30_000);
-        expect(JSON.parse(storage.values.get('maze:campaign:slot-1')!).formatVersion).toBe(4);
+        expect(JSON.parse(storage.values.get('maze:campaign:slot-1')!).formatVersion)
+            .toBe(SAVE_FORMAT_VERSION);
     });
 
     it('migrates version 3 saves with a deterministic reinforcement clock', () => {
@@ -380,25 +404,53 @@ describe('LocalSaveRepository', () => {
         const {
             reinforcementCountdownMs: _countdown,
             reinforcementOrdinal: _ordinal,
+            selectedObjectiveId: _selected,
             ...overworld
         } = current.overworld;
+        const {backpackCapacity: _capacity, ...player} = current.player;
         const versionThreeEnvelope = {
             formatVersion: 3,
             savedAt: '2026-07-23T14:30:00.000Z',
             state: {
                 ...current,
                 schemaVersion: 3,
+                player,
                 overworld
             }
         };
 
         const migrated = repository.importSlot('slot-1', JSON.stringify(versionThreeEnvelope));
 
-        expect(migrated.formatVersion).toBe(4);
-        expect(migrated.state.schemaVersion).toBe(4);
+        expect(migrated.formatVersion).toBe(SAVE_FORMAT_VERSION);
+        expect(migrated.state.schemaVersion).toBe(CAMPAIGN_SCHEMA_VERSION);
+        expect(migrated.state.player.backpackCapacity).toBe(BASE_BACKPACK_CAPACITY);
+        expect(migrated.state.overworld.selectedObjectiveId).toBeNull();
         expect(migrated.state.overworld.reinforcementOrdinal).toBe(0);
         expect(migrated.state.overworld.reinforcementCountdownMs)
             .toBe(createCampaign(27_182).overworld.reinforcementCountdownMs);
-        expect(JSON.parse(storage.values.get('maze:campaign:slot-1')!).formatVersion).toBe(4);
+        expect(JSON.parse(storage.values.get('maze:campaign:slot-1')!).formatVersion)
+            .toBe(SAVE_FORMAT_VERSION);
+    });
+
+    it('rejects a save that claims more backpack contents than capacity', () => {
+        const repository = new LocalSaveRepository(new MemoryStorage());
+        const current = createCampaign();
+        const overStuffed: CampaignState = {
+            ...current,
+            player: {
+                ...current.player,
+                backpackCapacity: BASE_BACKPACK_CAPACITY,
+                backpack: Array.from(
+                    {length: BASE_BACKPACK_CAPACITY + 1},
+                    (_unused, index) => ({
+                        ...current.player.backpack[0]!,
+                        id: `overflow/${index}`
+                    })
+                ),
+                quickSlotItemIds: [null, null, null]
+            }
+        };
+
+        expect(() => repository.save('slot-1', overStuffed)).toThrow();
     });
 });

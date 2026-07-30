@@ -19,6 +19,16 @@ export interface MinigameItemBonus {
     readonly modifiers: Readonly<Record<string, number | string | boolean>>;
 }
 
+/** Shop upgrade ids that fit a permanent device to the Getaway Car. */
+const CAR_MODULE_DEVICES: readonly {
+    readonly moduleId: string;
+    readonly device: 'oil-slick' | 'smoke-screen' | 'flamethrower';
+}[] = Object.freeze([
+    Object.freeze({moduleId: 'shop/car/oil-slick', device: 'oil-slick' as const}),
+    Object.freeze({moduleId: 'shop/car/smoke-screen', device: 'smoke-screen' as const}),
+    Object.freeze({moduleId: 'shop/car/flamethrower', device: 'flamethrower' as const})
+]);
+
 function ownedItemTypes(player: PlayerProgress): ReadonlySet<ItemTypeId> {
     return new Set([
         ...player.backpack
@@ -110,6 +120,15 @@ export function getMinigameItemBonus(
         if (owned.has('compass')) {
             labels.push('Compass improves high-speed handling');
             modifiers.heistHandlingMultiplier = 1.15;
+        }
+        // Shop-purchased car modules are permanent installs, so they arrive as
+        // fitted equipment rather than as something found on the road.
+        const installedDevices = CAR_MODULE_DEVICES
+            .filter(entry => player.installedModuleIds.includes(entry.moduleId))
+            .map(entry => entry.device);
+        if (installedDevices.length > 0) {
+            labels.push(`Fitted car modules: ${installedDevices.join(', ')}`);
+            modifiers.heistInstalledDevices = installedDevices.join(',');
         }
     }
 

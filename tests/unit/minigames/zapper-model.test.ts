@@ -9,7 +9,9 @@ import {
     ZAPPER_LANE_COUNT,
     ZAPPER_LANE_RELIEF_MS,
     ZAPPER_LANE_RELIEF_SPEED_MULTIPLIER,
+    ZAPPER_OUTGOING_SPEED,
     ZAPPER_RETURN_MISS_X,
+    ZAPPER_RETURN_SPEED,
     ZAPPER_SERVICE_X,
     advanceZapper,
     canonicalZapperCourseSignature,
@@ -87,6 +89,35 @@ describe('Zapper course generation', () => {
         }
 
         expect(signatures.size).toBeGreaterThanOrEqual(158);
+    });
+
+    it('slides blasters fast enough to juggle a tighter order cadence', () => {
+        // Faster slides are what make the shift manageable; without them the
+        // tightened cadence below would simply be unfair.
+        expect(ZAPPER_OUTGOING_SPEED).toBeGreaterThanOrEqual(500);
+        expect(ZAPPER_RETURN_SPEED).toBeGreaterThanOrEqual(440);
+        expect(ZAPPER_RETURN_SPEED).toBeLessThan(ZAPPER_OUTGOING_SPEED);
+
+        const gapsFor = (difficulty: number): readonly number[] => {
+            const course = createZapperCourse(new Mulberry32Random(5), {difficulty});
+            return course.orders.slice(1).map((order, index) =>
+                order.spawnAtMs - course.orders[index]!.spawnAtMs
+            );
+        };
+        const easy = gapsFor(0);
+        const hard = gapsFor(5);
+        const mean = (gaps: readonly number[]): number =>
+            gaps.reduce((total, gap) => total + gap, 0) / gaps.length;
+
+        expect(mean(hard)).toBeLessThan(mean(easy));
+        expect(mean(easy)).toBeLessThan(3_400);
+        // Still winnable: every generated schedule keeps the certified route.
+        for (const difficulty of [0, 1, 2, 3, 4, 5]) {
+            const course = createZapperCourse(new Mulberry32Random(77), {difficulty});
+            expect(hasZapperConstructiveServiceRoute(course)).toBe(true);
+            expect(course.tuning.outgoingSpeed).toBe(ZAPPER_OUTGOING_SPEED);
+            expect(course.tuning.returnSpeed).toBe(ZAPPER_RETURN_SPEED);
+        }
     });
 
     it('bounds difficulty and exposes varied strange aliens and lab equipment', () => {

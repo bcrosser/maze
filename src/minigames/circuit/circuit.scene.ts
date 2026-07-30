@@ -1,5 +1,7 @@
 import Phaser from 'phaser';
 
+import {getControlDeck} from '../../app/control-deck-host';
+import {CIRCUIT_CONTROL_SCHEME, type ControlEvent} from '../../app/control-scheme';
 import type {PerformanceGrade} from '../../domain/campaign/campaign-state';
 import {Mulberry32Random} from '../../domain/random/random-source';
 import type {
@@ -366,8 +368,10 @@ export class CircuitCrashScene extends Phaser.Scene {
         });
 
         this.input.keyboard?.on('keydown', this.handleKeyDown);
+        getControlDeck(this)?.setScheme(CIRCUIT_CONTROL_SCHEME, this.handleControlEvent);
         this.events.once('shutdown', () => {
             this.input.keyboard?.off('keydown', this.handleKeyDown);
+            getControlDeck(this)?.clearScheme(CIRCUIT_CONTROL_SCHEME.id);
             this.finishTimer?.remove(false);
             this.clearTelemetry();
         });
@@ -697,6 +701,45 @@ export class CircuitCrashScene extends Phaser.Scene {
                 break;
             case '4':
                 event.preventDefault();
+                this.useImmediateBooster('shuffle');
+                break;
+        }
+    };
+
+    /**
+     * The board keeps its tap-a-chip interaction; the shared deck adds a cursor
+     * and one button per booster so the same gestures work in every game.
+     */
+    private readonly handleControlEvent = (event: ControlEvent): void => {
+        if (this.finishing) return;
+        if (this.helpOpen) {
+            if (event.kind === 'button' && event.phase === 'press') this.closeHelp();
+            return;
+        }
+        if (this.state.terminalStatus !== 'active') return;
+        if (event.kind === 'direction') {
+            if (event.phase !== 'press') return;
+            this.moveCursor(
+                event.direction === 'left' ? -1 : event.direction === 'right' ? 1 : 0,
+                event.direction === 'up' ? -1 : event.direction === 'down' ? 1 : 0
+            );
+            return;
+        }
+        if (event.kind !== 'button' || event.phase !== 'press') return;
+        switch (event.id) {
+            case 'swap':
+                this.chooseCell(this.cursorIndex);
+                break;
+            case 'extra':
+                this.useImmediateBooster('extra');
+                break;
+            case 'hint':
+                this.useImmediateBooster('hint');
+                break;
+            case 'pulse':
+                this.togglePulseTargeting();
+                break;
+            case 'shuffle':
                 this.useImmediateBooster('shuffle');
                 break;
         }
@@ -1071,6 +1114,18 @@ export class CircuitCrashScene extends Phaser.Scene {
         this.boosterTexts.get('shuffle')?.setText(
             `4 REROUTE  ×${this.state.boosterCharges.shuffles}`
         );
+
+        const deck = getControlDeck(this);
+        const charges: readonly [string, number][] = [
+            ['extra', this.state.boosterCharges.extraMoves],
+            ['hint', this.state.boosterCharges.hints],
+            ['pulse', this.state.boosterCharges.pulses],
+            ['shuffle', this.state.boosterCharges.shuffles]
+        ];
+        for (const [id, remaining] of charges) {
+            deck?.setButtonState(id, {disabled: remaining <= 0});
+        }
+        deck?.setButtonState('pulse', {pressed: this.pulseTargeting});
 
         this.meterGraphics.clear();
         this.meterGraphics.fillStyle(0x07131c, 1);

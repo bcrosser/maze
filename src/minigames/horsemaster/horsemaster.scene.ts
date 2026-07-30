@@ -1,5 +1,11 @@
 import Phaser from 'phaser';
 
+import {getControlDeck} from '../../app/control-deck-host';
+import {
+    HORSEMASTER_CONTROL_SCHEME,
+    type ControlEvent
+} from '../../app/control-scheme';
+import {drawHorse} from '../../content/horse-art';
 import {Mulberry32Random} from '../../domain/random/random-source';
 import type {
     EncounterContext,
@@ -212,8 +218,10 @@ export class HorsemasterScene extends Phaser.Scene {
 
         this.createControls();
         this.input.keyboard?.on('keydown', this.handleKeyDown);
+        getControlDeck(this)?.setScheme(HORSEMASTER_CONTROL_SCHEME, this.handleControlEvent);
         this.events.once('shutdown', () => {
             this.input.keyboard?.off('keydown', this.handleKeyDown);
+            getControlDeck(this)?.clearScheme(HORSEMASTER_CONTROL_SCHEME.id);
             this.finishTimer?.remove(false);
             this.clearDatasets();
         });
@@ -285,24 +293,40 @@ export class HorsemasterScene extends Phaser.Scene {
     };
 
     private createControls(): void {
-        this.createButton(130, 571, 56, '▲', () => {
-            this.pendingVertical = 1;
-        }, 44, 0x263846, 0.7);
-        this.createButton(66, 623, 56, '◀', () => {
-            this.pendingHorizontal = -1;
-        }, 44, 0x263846, 0.7);
-        this.createButton(130, 623, 56, '▼', () => {
-            this.pendingVertical = -1;
-        }, 44, 0x263846, 0.7);
-        this.createButton(194, 623, 56, '▶', () => {
-            this.pendingHorizontal = 1;
-        }, 44, 0x263846, 0.7);
-        this.createButton(556, 619, 190, 'HOP ▲', () => {
-            this.pendingVertical = 1;
-        }, 56, 0x51358f, 0.85);
+        // Movement and HOP live on the shared control deck below the canvas;
+        // only the corner utilities stay in the scene.
         this.createButton(625, 20, 68, 'HELP', () => this.showHelp(), 36, 0x315b6b);
         this.createButton(42, 20, 68, 'EXIT', () => this.finish('abandoned'), 36, 0x74404a);
     }
+
+    private readonly handleControlEvent = (event: ControlEvent): void => {
+        if (this.finishing) return;
+        if (this.helpOpen) {
+            if (event.kind === 'button' && event.phase === 'press') this.closeHelp();
+            return;
+        }
+        if (event.kind === 'direction') {
+            if (event.phase !== 'press') return;
+            switch (event.direction) {
+                case 'left':
+                    this.pendingHorizontal = -1;
+                    break;
+                case 'right':
+                    this.pendingHorizontal = 1;
+                    break;
+                case 'up':
+                    this.pendingVertical = 1;
+                    break;
+                case 'down':
+                    this.pendingVertical = -1;
+                    break;
+            }
+            return;
+        }
+        if (event.kind === 'button' && event.phase === 'press' && event.id === 'hop') {
+            this.pendingVertical = 1;
+        }
+    };
 
     private createButton(
         x: number,
@@ -363,6 +387,9 @@ export class HorsemasterScene extends Phaser.Scene {
             'settles onto the nearest machine in its bed. GREEN flatbeds are ' +
             'slow with TWO machines, YELLOW pickups carry one, RED pickups are ' +
             'fast. Ride off the screen edge and you lose a heart.\n\n' +
+            'DOWN hops BACK a lane, even mid-ride, so a machine heading for ' +
+            'the edge is escapable — but the landing must still find a ' +
+            'machine, or the median.\n\n' +
             'Finish through the glowing door of the one true GYM.',
             {
                 color: '#fff7df',
@@ -847,86 +874,30 @@ export class HorsemasterScene extends Phaser.Scene {
             : pedal
                 ? Math.sin(clock / 140) * 2
                 : 0;
-        const headDip = pose.kind === 'idle' ? Math.sin(clock / 650) : 0;
-        const tailSway = Math.sin(clock / 400) * 2;
-
-        graphics.fillStyle(COLORS.ink, 0.28);
-        graphics.fillEllipse(x, y + 15, hop ? 26 : 38, 7);
-
-        graphics.lineStyle(4, COLORS.mane, 1);
-        graphics.lineBetween(x - 19, y - 6 + bob, x - 26, y + 2 + tailSway);
-
-        graphics.fillStyle(COLORS.horse);
-        graphics.fillEllipse(x - 2, y - 4 + bob, 32, 16);
-        graphics.fillEllipse(x - 13, y - 4 + bob, 16, 15);
-        graphics.fillTriangle(
-            x + 8, y - 9 + bob,
-            x + 20, y - 19 + bob + headDip,
-            x + 14, y - 1 + bob
-        );
-        graphics.fillTriangle(
-            x + 20, y - 19 + bob + headDip,
-            x + 24, y - 13 + bob + headDip,
-            x + 14, y - 1 + bob
-        );
-        graphics.fillEllipse(x + 22, y - 19 + bob + headDip, 13, 9);
-        graphics.fillStyle(COLORS.horseLight);
-        graphics.fillRoundedRect(x + 26, y - 22 + bob + headDip, 9, 6, 2);
-        graphics.fillStyle(COLORS.ink);
-        graphics.fillCircle(x + 33, y - 19 + bob + headDip, 1);
-
-        graphics.fillStyle(COLORS.mane);
-        graphics.fillTriangle(
-            x + 18, y - 25 + bob + headDip,
-            x + 20, y - 30 + bob + headDip,
-            x + 23, y - 24 + bob + headDip
-        );
-        graphics.fillTriangle(x + 5, y - 10 + bob, x + 8, y - 16 + bob, x + 11, y - 8 + bob);
-        graphics.fillTriangle(x + 9, y - 13 + bob, x + 12, y - 19 + bob, x + 15, y - 11 + bob);
-        graphics.fillTriangle(x + 13, y - 16 + bob, x + 16, y - 22 + bob, x + 19, y - 14 + bob);
-
-        graphics.fillStyle(COLORS.ink);
-        graphics.fillCircle(x + 21, y - 21 + bob + headDip, 1.5);
-
-        graphics.lineStyle(4, COLORS.horse, 1);
-        const hipY = y + 2 + bob;
-        if (pedal) {
-            const pump = Math.sin(clock / 140) * 3;
-            graphics.lineBetween(x - 14, hipY, x - 15, y + 10 + pump);
-            graphics.lineBetween(x - 8, hipY, x - 7, y + 10 - pump);
-            graphics.lineBetween(x + 6, hipY, x + 12, y - 5 + bob);
-            graphics.lineBetween(x + 11, hipY, x + 16, y - 3 + bob);
-        }
-        else if (hop) {
-            graphics.lineBetween(x - 14, hipY, x - 11, y + 8);
-            graphics.lineBetween(x - 8, hipY, x - 5, y + 8);
-            graphics.lineBetween(x + 6, hipY, x + 8, y + 8);
-            graphics.lineBetween(x + 11, hipY, x + 13, y + 8);
-        }
-        else {
-            const stride = gallop ? 7 : 0;
-            const phase = clock / 90;
-            const offsets = gallop
-                ? [
-                    Math.sin(phase) * stride,
-                    Math.sin(phase + 2.2) * stride,
-                    Math.sin(phase + 3.6) * stride,
-                    Math.sin(phase + 5.1) * stride
-                ]
-                : [-2, 1, -1, 2];
-            graphics.lineBetween(x - 14, hipY, x - 15 + offsets[0]!, y + 14);
-            graphics.lineBetween(x - 8, hipY, x - 7 + offsets[1]!, y + 14);
-            graphics.lineBetween(x + 6, hipY, x + 5 + offsets[2]!, y + 14);
-            graphics.lineBetween(x + 11, hipY, x + 12 + offsets[3]!, y + 14);
-        }
-
-        graphics.lineStyle(2, 0xf05b91, 1);
-        graphics.lineBetween(
-            x + 15,
-            y - 22 + bob + headDip,
-            x + 28,
-            y - 22 + bob + headDip
-        );
+        const stride = gallop ? 7 : 0;
+        const phase = clock / 90;
+        const pump = Math.sin(clock / 140) * 3;
+        // Riding a machine tucks the forelegs onto the pedals; a hop pulls all
+        // four in; otherwise the legs stride with the gallop cycle.
+        const legOffsets: readonly [number, number, number, number] = pedal
+            ? [-1 + pump, 1 - pump, 6, 5]
+            : hop
+                ? [3, 3, 2, 2]
+                : gallop
+                    ? [
+                        Math.sin(phase) * stride,
+                        Math.sin(phase + 2.2) * stride,
+                        Math.sin(phase + 3.6) * stride,
+                        Math.sin(phase + 5.1) * stride
+                    ]
+                    : [-2, 1, -1, 2];
+        drawHorse(graphics, x, y, {
+            bob,
+            headDip: pose.kind === 'idle' ? Math.sin(clock / 650) : 0,
+            tailSway: Math.sin(clock / 400) * 2,
+            legOffsets,
+            tucked: hop
+        });
     }
 
     private publishTelemetry(): void {

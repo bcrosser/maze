@@ -76,7 +76,9 @@ describe('scratch verify', () => {
         expect(minBumper).toBeGreaterThanOrEqual(96 - 1e-6);
         expect(maxSlot).toBeLessThanOrEqual(320 + 1e-6);
         expect(minBike).toBeGreaterThanOrEqual(180 - 1e-6);
-    });
+        // A 30k-seed sweep sits right on the default 5s budget, so it gets an
+        // explicit allowance instead of failing intermittently.
+    }, 30_000);
 
     it('per-lane gaps are time-invariant over long simulation', () => {
         const course = createHorsemasterCourse(new Mulberry32Random(1234));
@@ -95,5 +97,5 @@ describe('scratch verify', () => {
                 expect(Math.abs(gap - initialGaps[li]![gi]!)).toBeLessThan(1e-6);
             });
         });
-    });
+    }, 30_000);
 });

@@ -7,14 +7,15 @@ import {
     type LevelObjectivePlacement,
     type ObjectiveId
 } from './level-objectives';
+import {
+    getPassageDistances,
+    isPassage,
+    passageKey as key,
+    passageNeighbors
+} from './maze-distances';
 import type {Coordinate, MazeGrid} from './maze-types';
 
-const DIRECTIONS = Object.freeze([
-    Object.freeze({x: 0, y: -1}),
-    Object.freeze({x: 1, y: 0}),
-    Object.freeze({x: 0, y: 1}),
-    Object.freeze({x: -1, y: 0})
-]);
+export {getPassageDistances} from './maze-distances';
 
 const BANDS: Readonly<Record<ObjectiveId, readonly [number, number]>> = Object.freeze({
     pipe: [0.2, 0.5] as const,
@@ -38,41 +39,6 @@ export interface LevelObjectiveGeneration {
     readonly objectives: readonly LevelObjectivePlacement[];
     readonly pipeShortcutWall: Coordinate | null;
     readonly diagnostics: ObjectivePlacementDiagnostics;
-}
-
-function key(position: Coordinate): string {
-    return `${position.x},${position.y}`;
-}
-
-function isPassage(maze: MazeGrid, position: Coordinate): boolean {
-    return maze[position.y]?.[position.x]?.kind === 'passage';
-}
-
-function passageNeighbors(maze: MazeGrid, position: Coordinate): Coordinate[] {
-    return DIRECTIONS
-        .map(direction => ({x: position.x + direction.x, y: position.y + direction.y}))
-        .filter(candidate => isPassage(maze, candidate));
-}
-
-export function getPassageDistances(
-    maze: MazeGrid,
-    origin: Coordinate,
-    blocked: ReadonlySet<string> = new Set()
-): ReadonlyMap<string, number> {
-    if (!isPassage(maze, origin)) return new Map();
-    const distances = new Map<string, number>([[key(origin), 0]]);
-    const queue: Coordinate[] = [origin];
-    for (let index = 0; index < queue.length; index++) {
-        const current = queue[index]!;
-        const distance = distances.get(key(current))!;
-        for (const next of passageNeighbors(maze, current)) {
-            const nextKey = key(next);
-            if (blocked.has(nextKey) || distances.has(nextKey)) continue;
-            distances.set(nextKey, distance + 1);
-            queue.push(next);
-        }
-    }
-    return distances;
 }
 
 function graphDistance(maze: MazeGrid, from: Coordinate, to: Coordinate): number {

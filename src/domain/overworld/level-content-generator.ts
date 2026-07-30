@@ -153,7 +153,14 @@ export function getNativeLevelContentBudgets(
 ): NativeLevelContentBudgets {
     const tier = levelTier(state);
     const size = state.overworld.maze.length;
-    const baseThreat = clamp(5 + Math.floor((size - 21) / 8) + 2 * tier, 5, 24);
+    const levelNumber = getCampaignLevelNumber(state);
+    // Every level down the stairs is meant to bite harder, so threat rises with
+    // the level number itself rather than only with the two-level tier step.
+    const baseThreat = clamp(
+        5 + Math.floor((size - 21) / 8) + 2 * tier + (levelNumber - 1),
+        5,
+        32
+    );
     const difficultyThreat = difficulty === 'story'
         ? Math.floor(baseThreat * 0.75)
         : difficulty === 'expert'
@@ -171,7 +178,7 @@ export function getNativeLevelContentBudgets(
             6,
             16
         ),
-        monsterThreat: Math.min(26, difficultyThreat + alertThreat),
+        monsterThreat: Math.min(34, difficultyThreat + alertThreat),
         monsterEntities: clamp(
             5 + Math.floor((size - 21) / 12) + tier,
             5,
@@ -386,11 +393,19 @@ function createItems(
     });
 }
 
+/**
+ * Deeper tiers keep the earlier roster but add genuinely different threats:
+ * leaping ambushers, corridor casters, and finally heavily armored bruisers.
+ * The threat budget stops the deep pools from simply flooding a level.
+ */
 function monsterPool(tier: number): readonly MonsterTypeId[] {
-    if (tier <= 0) return ['moss-slime', 'ember-hound'];
-    if (tier === 1) return ['moss-slime', 'ember-hound', 'floating-eye'];
-    if (tier === 2) return ['moss-slime', 'ember-hound', 'floating-eye', 'cave-bat', 'mimic'];
-    return ['moss-slime', 'ember-hound', 'floating-eye', 'cave-bat', 'mimic', 'stone-golem'];
+    const pool: MonsterTypeId[] = ['moss-slime', 'ember-hound'];
+    if (tier >= 1) pool.push('floating-eye', 'giant-spider');
+    if (tier >= 2) pool.push('cave-bat', 'mimic', 'skeleton');
+    if (tier >= 3) pool.push('stone-golem', 'viper', 'frost-wraith');
+    if (tier >= 4) pool.push('shadow-stalker', 'bone-knight');
+    if (tier >= 5) pool.push('dragon-hatchling', 'maze-guardian');
+    return pool;
 }
 
 function variantFor(typeId: MonsterTypeId, random: RandomSource): MonsterVariantId {

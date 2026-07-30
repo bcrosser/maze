@@ -1,5 +1,7 @@
 import Phaser from 'phaser';
 
+import {getControlDeck} from '../../app/control-deck-host';
+import {CASINO_HEIST_CONTROL_SCHEME, type ControlEvent} from '../../app/control-scheme';
 import type {PerformanceGrade} from '../../domain/campaign/campaign-state';
 import {Mulberry32Random} from '../../domain/random/random-source';
 import type {
@@ -21,9 +23,12 @@ import {
     createCasinoHeistState,
     getCasinoHeistRenderSnapshot,
     setCasinoHeistPaused,
+    type CasinoHeistDeviceKind,
     type CasinoHeistEvent,
+    type CasinoHeistPickupKind,
     type CasinoHeistRenderSnapshot,
-    type CasinoHeistState
+    type CasinoHeistState,
+    type CasinoHeistTrafficKind
 } from './casino-heist-model';
 
 export const CASINO_HEIST_SCENE_KEY = 'casino-heist';
@@ -50,19 +55,49 @@ const COLORS = Object.freeze({
     danger: 0xff5265,
     weapon: 0xa98cff,
     ammo: 0x74ef87,
+    warning: 0xffc046,
     ink: 0x080a12
 });
 
-const ENEMY_COLORS = Object.freeze([
-    0xf04f62,
-    0x8f68e8,
-    0x4ccbd5,
-    0xf0a348,
-    0x65bd68,
-    0xdd5bc2,
-    0x8eabc9,
-    0xd7c84c
-]);
+/** Ordinary road users read as civilian: warm paint, lit windows, no lightbar. */
+const TRAFFIC_COLORS: Readonly<Record<
+    CasinoHeistTrafficKind,
+    {readonly body: number; readonly glass: number}
+>> = Object.freeze({
+    car: {body: 0x4c7fd6, glass: 0xbfe4ff},
+    motorcycle: {body: 0xd7c84c, glass: 0x2a2f38},
+    truck: {body: 0xc06a3c, glass: 0xd8ecff},
+    bus: {body: 0x62b56a, glass: 0xe4f6ff}
+});
+
+const PICKUP_COLORS: Readonly<Record<CasinoHeistPickupKind, number>> = Object.freeze({
+    weapon: 0xa98cff,
+    ammo: 0x74ef87,
+    slick: 0x8f79c9,
+    smoke: 0xc8d2dd,
+    flame: 0xff8a2a
+});
+
+const DEVICE_LABELS: Readonly<Record<CasinoHeistDeviceKind, string>> = Object.freeze({
+    'oil-slick': 'OIL SLICK',
+    'smoke-screen': 'SMOKE',
+    flamethrower: 'FLAME'
+});
+
+function pickupMessage(kind: CasinoHeistPickupKind, ammo: number): string {
+    switch (kind) {
+        case 'weapon':
+            return `PULSE CANNON ONLINE · ${ammo} SHOTS`;
+        case 'ammo':
+            return `AMMO RECOVERED · ${ammo} SHOTS`;
+        case 'slick':
+            return 'OIL SLICK TANK FITTED · DEPLOY BEHIND YOU';
+        case 'smoke':
+            return 'SMOKE LAUNCHER FITTED · BLINDS THE CHASE';
+        case 'flame':
+            return 'FLAME NOZZLE FITTED · BURNS THEM OFF YOUR DOORS';
+    }
+}
 
 function x(value: number): number {
     return value * SCALE_X;
@@ -92,7 +127,11 @@ export class CasinoHeistScene extends Phaser.Scene {
     private helpOpen = false;
     private steerLeft = false;
     private steerRight = false;
+    private throttleUp = false;
+    private throttleDown = false;
     private fireHeld = false;
+    private pendingDeploy = false;
+    private pendingSwitch = false;
     private finishing = false;
     private finishTimer: Phaser.Time.TimerEvent | null = null;
     private animationClockMs = 0;
@@ -116,6 +155,15 @@ export class CasinoHeistScene extends Phaser.Scene {
             1,
             getEncounterNumberModifier(data.context, 'heistHandlingMultiplier', 1)
         );
+        const installedDevices = String(
+            data.context.modifiers['heistInstalledDevices'] ?? ''
+        )
+            .split(',')
+            .filter((device): device is CasinoHeistDeviceKind =>
+                device === 'oil-slick' ||
+                device === 'smoke-screen' ||
+                device === 'flamethrower'
+            );
         const course = createCasinoHeistCourse(
             new Mulberry32Random(data.context.seed),
             {
@@ -124,7 +172,8 @@ export class CasinoHeistScene extends Phaser.Scene {
                     armor: hullBonus,
                     handling: Math.min(1, handlingMultiplier - 1),
                     powerupChance: 0,
-                    startAmmo: 0
+                    startAmmo: 0,
+                    installedDevices
                 }
             }
         );
@@ -184,9 +233,11 @@ export class CasinoHeistScene extends Phaser.Scene {
         this.createControls();
         this.input.keyboard?.on('keydown', this.handleKeyDown);
         this.input.keyboard?.on('keyup', this.handleKeyUp);
+        getControlDeck(this)?.setScheme(CASINO_HEIST_CONTROL_SCHEME, this.handleControlEvent);
         this.events.once('shutdown', () => {
             this.input.keyboard?.off('keydown', this.handleKeyDown);
             this.input.keyboard?.off('keyup', this.handleKeyUp);
+            getControlDeck(this)?.clearScheme(CASINO_HEIST_CONTROL_SCHEME.id);
             this.finishTimer?.remove(false);
             this.clearDatasets();
         });
@@ -203,10 +254,18 @@ export class CasinoHeistScene extends Phaser.Scene {
         const steer = this.steerLeft === this.steerRight
             ? 0
             : this.steerLeft ? -1 : 1;
+        const vertical = this.throttleUp === this.throttleDown
+            ? 0
+            : this.throttleUp ? 1 : -1;
         const result = advanceCasinoHeist(this.state, {
             steer,
-            fire: this.fireHeld
+            vertical,
+            fire: this.fireHeld,
+            deploy: this.pendingDeploy,
+            switchDevice: this.pendingSwitch
         }, Math.max(0, delta));
+        this.pendingDeploy = false;
+        this.pendingSwitch = false;
         this.state = result.state;
         this.handleEvents(result.events);
         this.syncPresentation();
@@ -239,11 +298,29 @@ export class CasinoHeistScene extends Phaser.Scene {
                 event.preventDefault();
                 this.steerRight = true;
                 break;
+            case 'arrowup':
+            case 'w':
+                event.preventDefault();
+                this.throttleUp = true;
+                break;
+            case 'arrowdown':
+            case 's':
+                event.preventDefault();
+                this.throttleDown = true;
+                break;
             case ' ':
             case 'f':
             case 'enter':
                 event.preventDefault();
                 this.fireHeld = true;
+                break;
+            case 'q':
+                event.preventDefault();
+                this.pendingDeploy = true;
+                break;
+            case 'e':
+                event.preventDefault();
+                this.pendingSwitch = true;
                 break;
             case 'h':
                 event.preventDefault();
@@ -266,6 +343,14 @@ export class CasinoHeistScene extends Phaser.Scene {
             case 'd':
                 this.steerRight = false;
                 break;
+            case 'arrowup':
+            case 'w':
+                this.throttleUp = false;
+                break;
+            case 'arrowdown':
+            case 's':
+                this.throttleDown = false;
+                break;
             case ' ':
             case 'f':
             case 'enter':
@@ -275,52 +360,34 @@ export class CasinoHeistScene extends Phaser.Scene {
     };
 
     private createControls(): void {
-        this.createHoldButton(82, 616, 126, '◀ STEER', () => {
-            this.steerLeft = true;
-        }, () => {
-            this.steerLeft = false;
-        });
-        this.createHoldButton(224, 616, 126, 'STEER ▶', () => {
-            this.steerRight = true;
-        }, () => {
-            this.steerRight = false;
-        });
-        this.createHoldButton(534, 616, 224, 'FIRE · NEEDS WEAPON + AMMO', () => {
-            this.fireHeld = true;
-        }, () => {
-            this.fireHeld = false;
-        }, 0x603c82);
+        // Steering and Fire moved to the shared control deck.
         this.createTapButton(42, 20, 68, 'EXIT', () => this.finish('abandoned'), 0x743943);
         this.createTapButton(630, 20, 68, 'HELP', () => this.showHelp(), 0x285a68);
     }
 
-    private createHoldButton(
-        xPosition: number,
-        yPosition: number,
-        width: number,
-        label: string,
-        start: () => void,
-        stop: () => void,
-        color = 0x294c5b
-    ): void {
-        const button = this.add.rectangle(xPosition, yPosition, width, 52, color, 0.97)
-            .setStrokeStyle(2, COLORS.cyan)
-            .setDepth(40)
-            .setInteractive({useHandCursor: true});
-        this.add.text(xPosition, yPosition, label, {
-            color: '#f7f1da',
-            fontFamily: 'Georgia, serif',
-            fontSize: width > 180 ? '13px' : '15px',
-            fontStyle: 'bold',
-            align: 'center'
-        }).setOrigin(0.5).setDepth(41);
-        button.on('pointerdown', () => {
-            if (!this.finishing && !this.helpOpen) start();
-        });
-        button.on('pointerup', stop);
-        button.on('pointerout', stop);
-        button.on('pointerupoutside', stop);
-    }
+    private readonly handleControlEvent = (event: ControlEvent): void => {
+        if (this.finishing) return;
+        if (this.helpOpen) {
+            if (event.kind === 'button' && event.phase === 'press') this.closeHelp();
+            return;
+        }
+        if (event.kind === 'direction') {
+            const held = event.phase === 'press';
+            if (event.direction === 'left') this.steerLeft = held;
+            if (event.direction === 'right') this.steerRight = held;
+            if (event.direction === 'up') this.throttleUp = held;
+            if (event.direction === 'down') this.throttleDown = held;
+            return;
+        }
+        if (event.kind !== 'button') return;
+        if (event.id === 'fire') {
+            this.fireHeld = event.phase === 'press';
+            return;
+        }
+        if (event.phase !== 'press') return;
+        if (event.id === 'deploy') this.pendingDeploy = true;
+        if (event.id === 'switch') this.pendingSwitch = true;
+    };
 
     private createTapButton(
         xPosition: number,
@@ -357,18 +424,22 @@ export class CasinoHeistScene extends Phaser.Scene {
             .setStrokeStyle(4, COLORS.casino)
             .setDepth(100)
             .setInteractive({useHandCursor: true});
-        const title = this.add.text(VIEW_SIZE / 2, 154, 'GETAWAY DRIVER BRIEFING', {
+        const title = this.add.text(VIEW_SIZE / 2, 148, 'GETAWAY DRIVER BRIEFING', {
             color: '#ff76d2',
             fontFamily: 'Georgia, serif',
             fontSize: '25px',
             fontStyle: 'bold'
         }).setOrigin(0.5).setDepth(101);
-        const body = this.add.text(VIEW_SIZE / 2, 326,
-            'You already found the Getaway Car. Now reach the casino at the end of the road.\n\n' +
-            'Hold LEFT or RIGHT for variable steering. Dodge nanotech crates, bollards, and the road edge.\n\n' +
-            'Your car starts with NO WEAPON. Drive through the violet gun module, then keep collecting green ammo crates.\n\n' +
-            'Luxury interceptors have spiked wheels and fire machine guns from their front only. Stay beside or behind them, or fire back.\n\n' +
-            'Survive the route to steal $1,000. A destroyed car earns nothing.',
+        const body = this.add.text(VIEW_SIZE / 2, 322,
+            'The casino is behind you and the money is in the boot. Get away clean.\n\n' +
+            'Steer with the pad, and drive UP or DOWN the road to close on traffic or hang back from it. ' +
+            'Ordinary cars, buses, trucks and bikes are all slower than you — go around them, and mind the dividers where the road splits.\n\n' +
+            'Cop cars and SWAT vans ram you toward the verge and shoot from a rolled-down window. ' +
+            'They cannot drive through traffic either: let them pile into a bus.\n\n' +
+            'The car starts with NO WEAPON. Collect the violet gun, green ammo, and the OIL SLICK, SMOKE and FLAME devices. ' +
+            'SWITCH arms the next device, DEPLOY spends it.\n\n' +
+            'Police helicopters hold station ahead and drop a partial spike strip — dodge it, or shoot the chopper down.\n\n' +
+            'Watch for the marked TURN-OFF and drop into the storm drain to vanish with $1,000. Drive past it and the road runs out.',
             {
                 color: '#f7f1da',
                 fontFamily: 'Georgia, serif',
@@ -404,38 +475,74 @@ export class CasinoHeistScene extends Phaser.Scene {
     private handleEvents(events: readonly CasinoHeistEvent[]): void {
         for (const event of events) {
             switch (event.kind) {
-                case 'enemy-spawned':
-                    this.messageText.setText('LUXURY INTERCEPTOR INBOUND · WATCH ITS FRONT GUNS');
+                case 'pursuer-spawned':
+                    this.messageText.setText('POLICE ON YOUR TAIL · THEY WILL TRY TO PUSH YOU OFF');
+                    break;
+                case 'helicopter-spawned':
+                    this.messageText.setText('CHOPPER AHEAD · SHOOT IT DOWN OR DODGE THE SPIKES');
+                    break;
+                case 'spike-strip-dropped':
+                    this.messageText.setText('SPIKE STRIP DOWN · IT DOES NOT COVER THE WHOLE ROAD');
+                    break;
+                case 'helicopter-downed':
+                    this.messageText.setText('CHOPPER DOWN · NOTHING DROPPED');
+                    break;
+                case 'helicopter-escaped':
                     break;
                 case 'pickup-collected':
-                    this.messageText.setText(
-                        event.pickupKind === 'weapon'
-                            ? `PULSE CANNON ONLINE · ${event.ammo} SHOTS`
-                            : `AMMO RECOVERED · ${event.ammo} SHOTS`
-                    );
+                    this.messageText.setText(pickupMessage(event.pickupKind, event.ammo));
                     break;
                 case 'player-fired':
                     break;
                 case 'enemy-fired':
-                    this.messageText.setText('ENEMY MUZZLE FLASH · CHANGE YOUR LINE');
+                    this.messageText.setText('WINDOW GUN · BREAK LEVEL WITH THEM');
+                    break;
+                case 'device-deployed':
+                    this.messageText.setText(
+                        `${DEVICE_LABELS[event.device]} DEPLOYED · ${event.remaining} LEFT`
+                    );
+                    break;
+                case 'device-armed':
+                    this.messageText.setText(`${DEVICE_LABELS[event.device]} ARMED`);
+                    break;
+                case 'pursuer-blinded':
+                    this.messageText.setText('THEY CANNOT SEE YOU · THEY ARE PEELING AWAY');
+                    break;
+                case 'rammed':
+                    this.messageText.setText('RAMMED · STEER BACK BEFORE YOU GRIND THE VERGE');
+                    break;
+                case 'pursuer-wrecked':
+                    this.messageText.setText(
+                        event.cause === 'traffic'
+                            ? 'THEY PILED INTO TRAFFIC'
+                            : `PURSUER WRECKED BY ${event.cause.replace('-', ' ').toUpperCase()}`
+                    );
                     break;
                 case 'damage':
                     this.messageText.setText(
-                        `${event.source.replace('-', ' ').toUpperCase()} HIT · ` +
+                        `${event.source.replace('-', ' ').toUpperCase()} · ` +
                         `${event.health} HULL LEFT`
                     );
                     break;
                 case 'recovered':
                     this.messageText.setText('HULL STABLE · KEEP DRIVING');
                     break;
-                case 'enemy-destroyed':
-                    this.messageText.setText('INTERCEPTOR DISABLED · ROAD OPEN');
+                case 'turnoff-ahead':
+                    this.messageText.setText('TURN-OFF AHEAD · LINE UP ON THE STORM DRAIN');
+                    break;
+                case 'traffic-spawned':
                     break;
                 case 'success':
-                    this.messageText.setText(`CASINO REACHED · $${event.credits.toLocaleString()} STOLEN`);
+                    this.messageText.setText(
+                        `INTO THE DRAIN · $${event.credits.toLocaleString()} AND GONE`
+                    );
                     break;
                 case 'failure':
-                    this.messageText.setText('GETAWAY CAR DESTROYED · THE NEXT ROAD WILL BE NEW');
+                    this.messageText.setText(
+                        event.reason === 'missed-turnoff'
+                            ? 'YOU DROVE PAST THE DRAIN · THE ROAD RAN OUT'
+                            : 'GETAWAY CAR DESTROYED · THE NEXT ROAD WILL BE NEW'
+                    );
                     break;
             }
         }
@@ -445,18 +552,29 @@ export class CasinoHeistScene extends Phaser.Scene {
         this.drawWorld();
         const snapshot = getCasinoHeistRenderSnapshot(this.state);
         const progress = Phaser.Math.Clamp(
-            snapshot.player.distance / snapshot.finishDistance,
+            snapshot.player.distance / this.state.course.drainDistance,
             0,
             1
         );
         const hearts = '♥'.repeat(snapshot.player.health) +
-            '♡'.repeat(snapshot.player.maxHealth - snapshot.player.health);
+            '♡'.repeat(Math.max(0, snapshot.player.maxHealth - snapshot.player.health));
         const weapon = snapshot.player.weapon === 'none'
             ? 'UNARMED'
             : `PULSE ${snapshot.player.ammo}`;
+        const armed = snapshot.player.armedDevice;
+        const charges = snapshot.player.deviceCharges[armed];
         this.hudText.setText(
-            `HULL ${hearts}  ${weapon}  CASINO ${Math.round(progress * 100)}%`
+            `HULL ${hearts}  ${weapon}  ` +
+            `${DEVICE_LABELS[armed]} ×${charges}  DRAIN ${Math.round(progress * 100)}%`
         );
+        const deck = getControlDeck(this);
+        deck?.setButtonState('fire', {
+            disabled: snapshot.player.weapon === 'none' || snapshot.player.ammo <= 0
+        });
+        deck?.setButtonState('deploy', {
+            label: `${DEVICE_LABELS[armed]} ×${charges}`,
+            disabled: charges <= 0
+        });
         this.publishTelemetry();
     }
 
@@ -468,15 +586,32 @@ export class CasinoHeistScene extends Phaser.Scene {
         graphics.fillRect(0, 0, VIEW_SIZE, VIEW_SIZE);
         this.drawCity(graphics);
         this.drawRoad(graphics, snapshot);
-        this.drawCasino(graphics, snapshot.finishY);
-        for (const obstacle of snapshot.obstacles) {
-            this.drawObstacle(graphics, x(obstacle.x), obstacle.y, obstacle.kind, x(obstacle.width), obstacle.length);
+        this.drawEscapeRoute(graphics, snapshot);
+        for (const hazard of snapshot.hazards) {
+            this.drawHazard(graphics, x(hazard.x), hazard.y, hazard.kind, x(hazard.halfWidth));
         }
         for (const powerup of snapshot.powerups) {
             this.drawPowerup(graphics, x(powerup.x), powerup.y, powerup.kind);
         }
-        for (const enemy of snapshot.enemies) {
-            this.drawCar(graphics, x(enemy.x), enemy.y, true, enemy.colorIndex, false);
+        for (const vehicle of snapshot.traffic) {
+            this.drawTraffic(
+                graphics,
+                x(vehicle.x),
+                vehicle.y,
+                vehicle.kind,
+                x(vehicle.width),
+                vehicle.length,
+                vehicle.wrecked
+            );
+        }
+        for (const pursuer of snapshot.pursuers) {
+            this.drawPursuer(graphics, x(pursuer.x), pursuer.y, pursuer);
+        }
+        for (const helicopter of snapshot.helicopters) {
+            this.drawHelicopter(graphics, x(helicopter.x), helicopter.y);
+        }
+        if (snapshot.player.flameMs > 0) {
+            this.drawFlame(graphics, x(snapshot.player.x), snapshot.player.y);
         }
         for (const projectile of snapshot.projectiles) {
             graphics.fillStyle(
@@ -493,8 +628,6 @@ export class CasinoHeistScene extends Phaser.Scene {
                 graphics,
                 x(snapshot.player.x),
                 snapshot.player.y,
-                false,
-                0,
                 snapshot.player.weapon !== 'none'
             );
         }
@@ -564,69 +697,293 @@ export class CasinoHeistScene extends Phaser.Scene {
         }
     }
 
-    private drawCasino(graphics: Phaser.GameObjects.Graphics, finishY: number): void {
-        if (finishY < -120 || finishY > VIEW_SIZE + 120) return;
-        const yPosition = finishY - 58;
-        graphics.fillStyle(COLORS.ink, 0.8);
-        graphics.fillRoundedRect(222, yPosition - 2, 228, 90, 12);
-        graphics.fillStyle(0x482261);
-        graphics.fillRoundedRect(228, yPosition, 216, 82, 10);
-        graphics.fillStyle(COLORS.casino);
-        graphics.fillRoundedRect(250, yPosition + 10, 172, 35, 12);
-        graphics.fillStyle(COLORS.gold);
-        for (let lamp = 0; lamp < 9; lamp++) {
-            graphics.fillCircle(263 + lamp * 18, yPosition + 27, 3);
+    /**
+     * The marked turn-off and the storm drain that ends the escape. The sign
+     * appears well before the mouth so the exit is never a surprise.
+     */
+    private drawEscapeRoute(
+        graphics: Phaser.GameObjects.Graphics,
+        snapshot: CasinoHeistRenderSnapshot
+    ): void {
+        if (!snapshot.turnoffVisible) return;
+        const signY = snapshot.turnoffY;
+        const drainX = x(snapshot.drainX);
+        const drainHalf = x(snapshot.drainHalfWidth);
+        if (signY > -60 && signY < VIEW_SIZE + 60) {
+            // Chevrons on the road plus a roadside sign board.
+            graphics.fillStyle(COLORS.gold, 0.85);
+            for (let index = 0; index < 3; index++) {
+                const chevronY = signY + index * 22;
+                graphics.fillTriangle(
+                    drainX, chevronY,
+                    drainX - 26, chevronY + 18,
+                    drainX + 26, chevronY + 18
+                );
+            }
+            graphics.fillStyle(COLORS.ink, 0.9);
+            graphics.fillRoundedRect(drainX + drainHalf + 10, signY - 26, 62, 40, 6);
+            graphics.fillStyle(COLORS.gold);
+            graphics.fillRoundedRect(drainX + drainHalf + 14, signY - 22, 54, 32, 5);
+            graphics.fillStyle(COLORS.ink);
+            graphics.fillTriangle(
+                drainX + drainHalf + 26, signY - 4,
+                drainX + drainHalf + 42, signY - 16,
+                drainX + drainHalf + 42, signY + 6
+            );
         }
-        graphics.lineStyle(7, COLORS.gold);
-        graphics.lineBetween(240, finishY, 432, finishY);
+        const drainY = snapshot.drainY;
+        if (drainY < -140 || drainY > VIEW_SIZE + 140) return;
+        // The drain mouth: a dark opening behind a heavy grate lip.
+        graphics.fillStyle(COLORS.ink, 0.95);
+        graphics.fillRoundedRect(drainX - drainHalf, drainY - 46, drainHalf * 2, 92, 10);
+        graphics.fillStyle(0x05070c);
+        graphics.fillRoundedRect(drainX - drainHalf + 8, drainY - 38, drainHalf * 2 - 16, 76, 8);
+        graphics.lineStyle(4, 0x8b93a3, 0.95);
+        for (let index = 0; index < 5; index++) {
+            const barY = drainY - 30 + index * 16;
+            graphics.lineBetween(drainX - drainHalf + 12, barY, drainX + drainHalf - 12, barY);
+        }
+        graphics.lineStyle(5, COLORS.cyan, 0.8);
+        graphics.strokeRoundedRect(drainX - drainHalf, drainY - 46, drainHalf * 2, 92, 10);
     }
 
-    private drawObstacle(
+    private drawTraffic(
         graphics: Phaser.GameObjects.Graphics,
         xPosition: number,
         yPosition: number,
-        kind: 'nano-crate' | 'security-bollard',
+        kind: CasinoHeistTrafficKind,
         width: number,
-        length: number
+        length: number,
+        wrecked: boolean
     ): void {
-        if (kind === 'nano-crate') {
-            graphics.fillStyle(COLORS.ink, 0.5);
+        const palette = TRAFFIC_COLORS[kind];
+        const body = wrecked ? 0x5c5852 : palette.body;
+        graphics.fillStyle(COLORS.ink, 0.5);
+        graphics.fillRoundedRect(
+            xPosition - width / 2 - 3,
+            yPosition - length / 2 - 3,
+            width + 6,
+            length + 6,
+            8
+        );
+        graphics.fillStyle(body);
+        graphics.fillRoundedRect(
+            xPosition - width / 2,
+            yPosition - length / 2,
+            width,
+            length,
+            kind === 'motorcycle' ? 9 : 7
+        );
+        if (kind === 'motorcycle') {
+            graphics.fillStyle(COLORS.ink);
+            graphics.fillCircle(xPosition, yPosition - length / 2 + 8, width * 0.34);
+            graphics.fillCircle(xPosition, yPosition + length / 2 - 8, width * 0.34);
+            graphics.fillStyle(palette.glass);
+            graphics.fillCircle(xPosition, yPosition, width * 0.3);
+        } else {
+            // Windows, then roof detail that separates a bus from a truck.
+            graphics.fillStyle(palette.glass, 0.9);
             graphics.fillRoundedRect(
-                xPosition - width / 2 - 3,
-                yPosition - length / 2 - 3,
-                width + 6,
-                length + 6,
-                6
+                xPosition - width / 2 + 5,
+                yPosition - length / 2 + 7,
+                width - 10,
+                Math.min(22, length * 0.28),
+                4
             );
-            graphics.fillStyle(0x8d6238);
-            graphics.fillRoundedRect(
+            if (kind === 'bus') {
+                graphics.fillStyle(palette.glass, 0.55);
+                for (let index = 0; index < 4; index++) {
+                    graphics.fillRect(
+                        xPosition - width / 2 + 6,
+                        yPosition - length / 2 + 34 + index * 18,
+                        width - 12,
+                        11
+                    );
+                }
+            } else if (kind === 'truck') {
+                graphics.fillStyle(0x8d7d63);
+                graphics.fillRoundedRect(
+                    xPosition - width / 2 + 4,
+                    yPosition - length / 2 + 34,
+                    width - 8,
+                    length - 42,
+                    5
+                );
+            }
+            graphics.fillStyle(COLORS.ink);
+            for (const side of [-1, 1]) {
+                graphics.fillRoundedRect(
+                    xPosition + side * (width / 2) - (side < 0 ? 6 : 0),
+                    yPosition - length / 2 + 12,
+                    6,
+                    length * 0.22,
+                    2
+                );
+                graphics.fillRoundedRect(
+                    xPosition + side * (width / 2) - (side < 0 ? 6 : 0),
+                    yPosition + length / 2 - length * 0.3,
+                    6,
+                    length * 0.22,
+                    2
+                );
+            }
+        }
+        if (wrecked) {
+            graphics.lineStyle(3, COLORS.danger, 0.9);
+            graphics.lineBetween(
                 xPosition - width / 2,
                 yPosition - length / 2,
-                width,
-                length,
-                5
-            );
-            graphics.lineStyle(3, COLORS.gold);
-            graphics.lineBetween(
-                xPosition - width / 2 + 5,
-                yPosition - length / 2 + 5,
-                xPosition + width / 2 - 5,
-                yPosition + length / 2 - 5
+                xPosition + width / 2,
+                yPosition + length / 2
             );
             graphics.lineBetween(
-                xPosition + width / 2 - 5,
-                yPosition - length / 2 + 5,
-                xPosition - width / 2 + 5,
-                yPosition + length / 2 - 5
+                xPosition + width / 2,
+                yPosition - length / 2,
+                xPosition - width / 2,
+                yPosition + length / 2
             );
+        }
+    }
+
+    private drawPursuer(
+        graphics: Phaser.GameObjects.Graphics,
+        xPosition: number,
+        yPosition: number,
+        pursuer: CasinoHeistRenderSnapshot['pursuers'][number]
+    ): void {
+        const swat = pursuer.kind === 'swat-van';
+        const width = swat ? 48 : 42;
+        const length = swat ? 88 : 72;
+        graphics.fillStyle(COLORS.ink, 0.55);
+        graphics.fillRoundedRect(
+            xPosition - width / 2 - 3,
+            yPosition - length / 2 - 3,
+            width + 6,
+            length + 6,
+            10
+        );
+        // Black-and-white cruiser, or a slab-sided armoured van.
+        graphics.fillStyle(swat ? 0x2b3138 : 0x161a1f);
+        graphics.fillRoundedRect(
+            xPosition - width / 2,
+            yPosition - length / 2,
+            width,
+            length,
+            swat ? 5 : 9
+        );
+        if (!swat) {
+            graphics.fillStyle(0xe9edf2);
+            graphics.fillRect(xPosition - width / 2, yPosition - 12, width, 26);
         } else {
-            graphics.fillStyle(COLORS.danger);
-            for (const offset of [-width * 0.3, 0, width * 0.3]) {
-                graphics.fillRoundedRect(xPosition + offset - 7, yPosition - 22, 14, 44, 5);
-                graphics.fillStyle(COLORS.paper);
-                graphics.fillRect(xPosition + offset - 5, yPosition - 7, 10, 8);
-                graphics.fillStyle(COLORS.danger);
-            }
+            graphics.fillStyle(0x3f474f);
+            graphics.fillRoundedRect(
+                xPosition - width / 2 + 4,
+                yPosition - length / 2 + 26,
+                width - 8,
+                length - 34,
+                4
+            );
+            graphics.fillStyle(0x9aa3ad, 0.8);
+            graphics.fillRect(xPosition - 6, yPosition - length / 2 + 32, 12, length - 46);
+        }
+        graphics.fillStyle(0x7fd9ff, 0.9);
+        graphics.fillRoundedRect(
+            xPosition - width / 2 + 6,
+            yPosition - length / 2 + 8,
+            width - 12,
+            18,
+            4
+        );
+        // The light bar flashes red and blue on alternate frames.
+        const flash = Math.floor(this.animationClockMs / 140) % 2 === 0;
+        graphics.fillStyle(flash ? COLORS.danger : 0x4d7dff);
+        graphics.fillRoundedRect(xPosition - 16, yPosition - length / 2 - 8, 14, 9, 3);
+        graphics.fillStyle(flash ? 0x4d7dff : COLORS.danger);
+        graphics.fillRoundedRect(xPosition + 2, yPosition - length / 2 - 8, 14, 9, 3);
+        if (pursuer.blinded) {
+            graphics.fillStyle(0xd8d8d8, 0.55);
+            graphics.fillCircle(xPosition, yPosition, width * 0.9);
+        }
+        if (pursuer.spinningOut) {
+            graphics.lineStyle(3, COLORS.warning, 0.9);
+            graphics.strokeCircle(xPosition, yPosition, width * 0.85);
+        }
+    }
+
+    private drawHelicopter(
+        graphics: Phaser.GameObjects.Graphics,
+        xPosition: number,
+        yPosition: number
+    ): void {
+        const spin = Math.sin(this.animationClockMs / 30);
+        graphics.fillStyle(COLORS.ink, 0.35);
+        graphics.fillEllipse(xPosition, yPosition + 40, 60, 16);
+        graphics.fillStyle(0x1f2a33);
+        graphics.fillEllipse(xPosition, yPosition, 46, 30);
+        graphics.fillRect(xPosition - 6, yPosition + 8, 12, 34);
+        graphics.fillStyle(0x7fd9ff, 0.9);
+        graphics.fillEllipse(xPosition + 12, yPosition - 4, 18, 14);
+        graphics.lineStyle(4, 0xb8c2cc, 0.95);
+        graphics.lineBetween(
+            xPosition - 62 * Math.abs(spin) - 8,
+            yPosition - 18,
+            xPosition + 62 * Math.abs(spin) + 8,
+            yPosition - 18
+        );
+        graphics.lineBetween(xPosition - 10, yPosition + 42, xPosition + 10, yPosition + 42);
+        graphics.fillStyle(COLORS.danger);
+        graphics.fillCircle(xPosition, yPosition + 14, 3);
+    }
+
+    private drawHazard(
+        graphics: Phaser.GameObjects.Graphics,
+        xPosition: number,
+        yPosition: number,
+        kind: 'oil-slick' | 'spike-strip',
+        halfWidth: number
+    ): void {
+        if (kind === 'oil-slick') {
+            graphics.fillStyle(0x0b0d12, 0.85);
+            graphics.fillEllipse(xPosition, yPosition, halfWidth * 2, 34);
+            graphics.fillStyle(0x3d2f5c, 0.7);
+            graphics.fillEllipse(xPosition - 6, yPosition - 4, halfWidth, 16);
+            return;
+        }
+        graphics.fillStyle(0x2c3138);
+        graphics.fillRect(xPosition - halfWidth, yPosition - 7, halfWidth * 2, 14);
+        graphics.fillStyle(0xd9dee5);
+        for (let spike = -halfWidth + 6; spike < halfWidth - 4; spike += 12) {
+            graphics.fillTriangle(
+                xPosition + spike,
+                yPosition - 7,
+                xPosition + spike + 5,
+                yPosition - 18,
+                xPosition + spike + 10,
+                yPosition - 7
+            );
+        }
+    }
+
+    /** The side flamethrower's cone, drawn while the burner is live. */
+    private drawFlame(
+        graphics: Phaser.GameObjects.Graphics,
+        xPosition: number,
+        yPosition: number
+    ): void {
+        const flicker = 1 + Math.sin(this.animationClockMs / 40) * 0.15;
+        for (const side of [-1, 1]) {
+            graphics.fillStyle(0xff8a2a, 0.55);
+            graphics.fillTriangle(
+                xPosition + side * 18, yPosition - 6,
+                xPosition + side * 96 * flicker, yPosition - 34,
+                xPosition + side * 96 * flicker, yPosition + 26
+            );
+            graphics.fillStyle(0xffe08a, 0.6);
+            graphics.fillTriangle(
+                xPosition + side * 18, yPosition - 2,
+                xPosition + side * 58 * flicker, yPosition - 16,
+                xPosition + side * 58 * flicker, yPosition + 14
+            );
         }
     }
 
@@ -634,10 +991,10 @@ export class CasinoHeistScene extends Phaser.Scene {
         graphics: Phaser.GameObjects.Graphics,
         xPosition: number,
         yPosition: number,
-        kind: 'weapon' | 'ammo'
+        kind: CasinoHeistPickupKind
     ): void {
         const pulse = 1 + Math.sin(this.animationClockMs / 130) * 0.12;
-        const color = kind === 'weapon' ? COLORS.weapon : COLORS.ammo;
+        const color = PICKUP_COLORS[kind];
         graphics.fillStyle(color, 0.2);
         graphics.fillCircle(xPosition, yPosition, 25 * pulse);
         graphics.lineStyle(3, color);
@@ -651,26 +1008,42 @@ export class CasinoHeistScene extends Phaser.Scene {
                 xPosition + 12, yPosition + 3
             );
             graphics.fillRect(xPosition - 5, yPosition + 2, 7, 12);
-        } else {
+        } else if (kind === 'ammo') {
             graphics.fillRect(xPosition - 10, yPosition - 12, 7, 24);
             graphics.fillRect(xPosition + 3, yPosition - 12, 7, 24);
             graphics.fillStyle(COLORS.ink);
             graphics.fillRect(xPosition - 8, yPosition - 9, 3, 16);
             graphics.fillRect(xPosition + 5, yPosition - 9, 3, 16);
+        } else if (kind === 'slick') {
+            graphics.fillEllipse(xPosition, yPosition + 4, 26, 12);
+            graphics.fillRoundedRect(xPosition - 7, yPosition - 13, 14, 14, 3);
+        } else if (kind === 'smoke') {
+            graphics.fillCircle(xPosition - 6, yPosition + 2, 8);
+            graphics.fillCircle(xPosition + 5, yPosition - 3, 7);
+            graphics.fillCircle(xPosition + 2, yPosition + 8, 5);
+        } else {
+            graphics.fillTriangle(
+                xPosition - 12, yPosition + 12,
+                xPosition, yPosition - 14,
+                xPosition + 12, yPosition + 12
+            );
+            graphics.fillStyle(COLORS.paper);
+            graphics.fillTriangle(
+                xPosition - 5, yPosition + 10,
+                xPosition, yPosition - 2,
+                xPosition + 5, yPosition + 10
+            );
         }
     }
 
+    /** The player's getaway car, with its gun turret when one is fitted. */
     private drawCar(
         graphics: Phaser.GameObjects.Graphics,
         xPosition: number,
         yPosition: number,
-        enemy: boolean,
-        colorIndex: number,
         armed: boolean
     ): void {
-        const color = enemy
-            ? ENEMY_COLORS[colorIndex % ENEMY_COLORS.length]!
-            : 0xe6424e;
+        const color = 0xe6424e;
         graphics.fillStyle(COLORS.ink, 0.5);
         graphics.fillRoundedRect(xPosition - 24, yPosition - 35, 48, 73, 13);
         graphics.fillStyle(color);
@@ -687,19 +1060,7 @@ export class CasinoHeistScene extends Phaser.Scene {
         graphics.fillRoundedRect(xPosition + 19, yPosition - 21, 8, 20, 3);
         graphics.fillRoundedRect(xPosition - 27, yPosition + 12, 8, 17, 3);
         graphics.fillRoundedRect(xPosition + 19, yPosition + 12, 8, 17, 3);
-        if (enemy) {
-            graphics.fillStyle(COLORS.paper);
-            for (const side of [-1, 1]) {
-                graphics.fillTriangle(
-                    xPosition + side * 24, yPosition - 11,
-                    xPosition + side * 34, yPosition - 5,
-                    xPosition + side * 24, yPosition + 1
-                );
-            }
-            graphics.fillStyle(COLORS.danger);
-            graphics.fillRect(xPosition - 8, yPosition - 43, 5, 13);
-            graphics.fillRect(xPosition + 3, yPosition - 43, 5, 13);
-        } else if (armed) {
+        if (armed) {
             graphics.fillStyle(COLORS.cyan);
             graphics.fillRoundedRect(xPosition - 6, yPosition - 47, 12, 22, 4);
             graphics.fillStyle(COLORS.paper);
@@ -711,7 +1072,7 @@ export class CasinoHeistScene extends Phaser.Scene {
         const canvas = this.game.canvas;
         const snapshot = getCasinoHeistRenderSnapshot(this.state);
         const progress = Phaser.Math.Clamp(
-            snapshot.player.distance / snapshot.finishDistance,
+            snapshot.player.distance / this.state.course.drainDistance,
             0,
             1
         );
@@ -719,18 +1080,34 @@ export class CasinoHeistScene extends Phaser.Scene {
             .filter(powerup => powerup.y < snapshot.player.y + 40)
             .sort((left, right) => right.y - left.y)[0];
         canvas.dataset.heistStatus = snapshot.status;
+        canvas.dataset.heistTerminalReason = this.state.terminalReason ?? '';
         canvas.dataset.heistHealth = String(snapshot.player.health);
         canvas.dataset.heistMaxHealth = String(snapshot.player.maxHealth);
         canvas.dataset.heistWeapon = snapshot.player.weapon;
         canvas.dataset.heistAmmo = String(snapshot.player.ammo);
+        canvas.dataset.heistArmedDevice = snapshot.player.armedDevice;
+        canvas.dataset.heistDeviceCharges = [
+            `oil-slick:${snapshot.player.deviceCharges['oil-slick']}`,
+            `smoke-screen:${snapshot.player.deviceCharges['smoke-screen']}`,
+            `flamethrower:${snapshot.player.deviceCharges.flamethrower}`
+        ].join(',');
         canvas.dataset.heistX = String(Math.round(snapshot.player.x));
+        canvas.dataset.heistScreenY = String(Math.round(snapshot.player.y));
         canvas.dataset.heistDistance = String(Math.round(snapshot.player.distance));
         canvas.dataset.heistProgress = progress.toFixed(4);
         canvas.dataset.heistPowerupsCollected = String(this.state.telemetry.powerupsCollected);
         canvas.dataset.heistShotsFired = String(this.state.telemetry.shotsFired);
-        canvas.dataset.heistEnemiesDestroyed = String(this.state.telemetry.enemiesDestroyed);
+        canvas.dataset.heistPursuersDestroyed =
+            String(this.state.telemetry.pursuersDestroyed);
+        canvas.dataset.heistPursuersWrecked = String(this.state.telemetry.pursuersWrecked);
+        canvas.dataset.heistHelicoptersDowned =
+            String(this.state.telemetry.helicoptersDowned);
+        canvas.dataset.heistDevicesUsed = String(this.state.telemetry.devicesUsed);
         canvas.dataset.heistEnemyShots = String(this.state.telemetry.enemyShotsFired);
-        canvas.dataset.heistActiveEnemies = String(snapshot.enemies.length);
+        canvas.dataset.heistActivePursuers = String(snapshot.pursuers.length);
+        canvas.dataset.heistActiveTraffic = String(snapshot.traffic.length);
+        canvas.dataset.heistActiveHelicopters = String(snapshot.helicopters.length);
+        canvas.dataset.heistTurnoffVisible = String(snapshot.turnoffVisible);
         canvas.dataset.heistNearestPowerupX = nearestPowerup ? String(Math.round(nearestPowerup.x)) : '';
         canvas.dataset.heistNearestPowerupY = nearestPowerup ? String(Math.round(nearestPowerup.y)) : '';
         canvas.dataset.heistHelpOpen = String(this.helpOpen);
@@ -742,18 +1119,28 @@ export class CasinoHeistScene extends Phaser.Scene {
     private clearDatasets(): void {
         const canvas = this.game.canvas;
         delete canvas.dataset.heistStatus;
+        delete canvas.dataset.heistTerminalReason;
         delete canvas.dataset.heistHealth;
         delete canvas.dataset.heistMaxHealth;
         delete canvas.dataset.heistWeapon;
         delete canvas.dataset.heistAmmo;
+        delete canvas.dataset.heistArmedDevice;
+        delete canvas.dataset.heistDeviceCharges;
         delete canvas.dataset.heistX;
+        delete canvas.dataset.heistScreenY;
         delete canvas.dataset.heistDistance;
         delete canvas.dataset.heistProgress;
         delete canvas.dataset.heistPowerupsCollected;
         delete canvas.dataset.heistShotsFired;
-        delete canvas.dataset.heistEnemiesDestroyed;
+        delete canvas.dataset.heistPursuersDestroyed;
+        delete canvas.dataset.heistPursuersWrecked;
+        delete canvas.dataset.heistHelicoptersDowned;
+        delete canvas.dataset.heistDevicesUsed;
         delete canvas.dataset.heistEnemyShots;
-        delete canvas.dataset.heistActiveEnemies;
+        delete canvas.dataset.heistActivePursuers;
+        delete canvas.dataset.heistActiveTraffic;
+        delete canvas.dataset.heistActiveHelicopters;
+        delete canvas.dataset.heistTurnoffVisible;
         delete canvas.dataset.heistNearestPowerupX;
         delete canvas.dataset.heistNearestPowerupY;
         delete canvas.dataset.heistHelpOpen;
@@ -786,7 +1173,9 @@ export class CasinoHeistScene extends Phaser.Scene {
                 1_000,
                 20_000 +
                 this.state.player.health * 2_000 +
-                this.state.telemetry.enemiesDestroyed * 750 -
+                this.state.telemetry.pursuersDestroyed * 750 +
+                this.state.telemetry.pursuersWrecked * 500 +
+                this.state.telemetry.helicoptersDowned * 1_200 -
                 this.state.telemetry.hitsTaken * 1_000 -
                 Math.floor(elapsedMs / 20)
             )

@@ -1,5 +1,7 @@
 import Phaser from 'phaser';
 
+import {getControlDeck} from '../../app/control-deck-host';
+import {PLATFORMER_CONTROL_SCHEME, type ControlEvent} from '../../app/control-scheme';
 import {Mulberry32Random} from '../../domain/random/random-source';
 import type {EncounterContext, EncounterResult, OutcomeEffect} from '../../encounters/contracts';
 import {
@@ -17,6 +19,7 @@ import {
     runtimePlatformRect,
     setPlatformerPaused,
     type PlatformerCollectible,
+    type PlatformerCollectibleKind,
     type PlatformerEvent,
     type PlatformerInput,
     type PlatformerLevel,
@@ -33,7 +36,6 @@ export interface PlatformerLaunchData {
 
 const VIEW_SIZE = 672;
 const HUD_HEIGHT = 104;
-const TOUCH_Y = 610;
 
 const COLORS = Object.freeze({
     background: 0x111714,
@@ -72,10 +74,22 @@ function surfaceColor(surface: PlatformerSurfaceKind): number {
     }
 }
 
+/** Short, readable names for every pickup the level can place. */
+const COLLECTIBLE_LABELS: Readonly<Record<PlatformerCollectibleKind, string>> = Object.freeze({
+    core: 'POWER CORE',
+    salvage: 'SALVAGE',
+    'pulse-blaster': 'BLASTER',
+    ammo: 'AMMO',
+    shield: 'SHIELD',
+    emp: 'EMP'
+});
+
 function eventMessage(event: PlatformerEvent): string {
     switch (event.kind) {
         case 'jump':
             return '';
+        case 'dropped-through':
+            return 'DROPPED THROUGH — HOLD DOWN ON A RAISED PLATFORM';
         case 'shot-fired':
             return '';
         case 'empty-weapon':
@@ -128,9 +142,13 @@ export class PlatformerScene extends Phaser.Scene {
     private keyboardFire = false;
     private jumpPressed = false;
     private firePressed = false;
-    private readonly touchLeft = new Set<number>();
-    private readonly touchRight = new Set<number>();
-    private readonly touchJump = new Set<number>();
+    private readonly collectibleLabels = new Map<string, Phaser.GameObjects.Text>();
+    private keyboardDown = false;
+    private deckLeft = false;
+    private deckRight = false;
+    private deckDown = false;
+    private deckJump = false;
+    private deckFire = false;
     private pauseOpen = false;
     private pauseObjects: Phaser.GameObjects.GameObject[] = [];
     private finishing = false;
@@ -179,9 +197,12 @@ export class PlatformerScene extends Phaser.Scene {
         this.keyboardFire = false;
         this.jumpPressed = false;
         this.firePressed = false;
-        this.touchLeft.clear();
-        this.touchRight.clear();
-        this.touchJump.clear();
+        this.keyboardDown = false;
+        this.deckLeft = false;
+        this.deckRight = false;
+        this.deckDown = false;
+        this.deckJump = false;
+        this.deckFire = false;
         this.pauseOpen = false;
         this.pauseObjects = [];
         this.finishing = false;
@@ -202,24 +223,24 @@ export class PlatformerScene extends Phaser.Scene {
         this.cameras.main.startFollow(this.cameraTarget, true, 0.13, 0.1, -165, 0);
         this.cameras.main.setRoundPixels(true);
 
+        this.collectibleLabels.clear();
+        this.createCollectibleLabels();
         this.createHud();
-        this.createTouchControls();
         this.bindInput();
         this.syncPresentation();
     }
 
     override update(_time: number, delta: number): void {
         if (this.finishing) return;
-        const horizontal: -1 | 0 | 1 =
-            (this.keyboardLeft || this.touchLeft.size > 0) ===
-            (this.keyboardRight || this.touchRight.size > 0)
-                ? 0
-                : this.keyboardLeft || this.touchLeft.size > 0 ? -1 : 1;
+        const left = this.keyboardLeft || this.deckLeft;
+        const right = this.keyboardRight || this.deckRight;
+        const horizontal: -1 | 0 | 1 = left === right ? 0 : left ? -1 : 1;
         const input: PlatformerInput = {
             horizontal,
             jumpPressed: this.jumpPressed,
-            jumpHeld: this.keyboardJump || this.touchJump.size > 0,
-            firePressed: this.firePressed
+            jumpHeld: this.keyboardJump || this.deckJump,
+            firePressed: this.firePressed,
+            dropPressed: this.keyboardDown || this.deckDown
         };
         this.jumpPressed = false;
         this.firePressed = false;
@@ -266,7 +287,7 @@ export class PlatformerScene extends Phaser.Scene {
             fontFamily: 'Georgia, serif',
             fontSize: '13px'
         }).setScrollFactor(0).setDepth(101);
-        this.messageText = this.add.text(250, 69, 'FIND EVERY CORE — ENEMIES MAY BE FOUGHT OR EVADED', {
+        this.messageText = this.add.text(250, 69, 'FIND EVERY CORE — HOLD DOWN TO DROP THROUGH A LEDGE', {
             color: '#dce8a5',
             fontFamily: 'Georgia, serif',
             fontSize: '13px',
@@ -289,9 +310,11 @@ export class PlatformerScene extends Phaser.Scene {
     private bindInput(): void {
         this.input.keyboard?.on('keydown', this.handleKeyDown, this);
         this.input.keyboard?.on('keyup', this.handleKeyUp, this);
+        getControlDeck(this)?.setScheme(PLATFORMER_CONTROL_SCHEME, this.handleControlEvent);
         this.events.once('shutdown', () => {
             this.input.keyboard?.off('keydown', this.handleKeyDown, this);
             this.input.keyboard?.off('keyup', this.handleKeyUp, this);
+            getControlDeck(this)?.clearScheme(PLATFORMER_CONTROL_SCHEME.id);
             for (const key of [
                 'platformerX',
                 'platformerY',
@@ -323,6 +346,8 @@ export class PlatformerScene extends Phaser.Scene {
         } else if (key === 'arrowup' || key === 'w' || key === ' ') {
             if (!this.keyboardJump) this.jumpPressed = true;
             this.keyboardJump = true;
+        } else if (key === 'arrowdown' || key === 's') {
+            this.keyboardDown = true;
         } else if (key === 'f' || key === 'j' || key === 'x') {
             if (!this.keyboardFire) this.firePressed = true;
             this.keyboardFire = true;
@@ -337,6 +362,7 @@ export class PlatformerScene extends Phaser.Scene {
         if (key === 'arrowleft' || key === 'a') this.keyboardLeft = false;
         else if (key === 'arrowright' || key === 'd') this.keyboardRight = false;
         else if (key === 'arrowup' || key === 'w' || key === ' ') this.keyboardJump = false;
+        else if (key === 'arrowdown' || key === 's') this.keyboardDown = false;
         else if (key === 'f' || key === 'j' || key === 'x') this.keyboardFire = false;
         else return;
         event.preventDefault();
@@ -360,56 +386,37 @@ export class PlatformerScene extends Phaser.Scene {
         }
     }
 
-    private createTouchControls(): void {
-        this.createHoldButton(58, TOUCH_Y, '◀', this.touchLeft);
-        this.createHoldButton(136, TOUCH_Y, '▶', this.touchRight);
-        this.createHoldButton(522, TOUCH_Y, 'JUMP', this.touchJump, () => {
-            if (this.touchJump.size === 0) this.jumpPressed = true;
-        });
-        const fire = this.add.circle(612, TOUCH_Y, 34, 0x171918, 0.9)
-            .setStrokeStyle(3, COLORS.warning)
-            .setScrollFactor(0)
-            .setDepth(102)
-            .setInteractive({useHandCursor: true});
-        this.add.text(612, TOUCH_Y, 'FIRE', {
-            color: '#f5f0df',
-            fontFamily: 'Georgia, serif',
-            fontSize: '13px'
-        }).setOrigin(0.5).setScrollFactor(0).setDepth(103);
-        fire.on('pointerdown', () => {
-            if (this.canInteract()) this.firePressed = true;
-        });
-    }
-
-    private createHoldButton(
-        x: number,
-        y: number,
-        label: string,
-        pointers: Set<number>,
-        beforeAdd?: () => void
-    ): void {
-        const button = this.add.circle(x, y, 34, 0x171918, 0.9)
-            .setStrokeStyle(3, COLORS.accent)
-            .setScrollFactor(0)
-            .setDepth(102)
-            .setInteractive({useHandCursor: true});
-        this.add.text(x, y, label, {
-            color: '#f5f0df',
-            fontFamily: 'Georgia, serif',
-            fontSize: label.length > 2 ? '13px' : '21px'
-        }).setOrigin(0.5).setScrollFactor(0).setDepth(103);
-        button.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
-            if (!this.canInteract()) return;
-            beforeAdd?.();
-            pointers.add(pointer.id);
-        });
-        const release = (pointer: Phaser.Input.Pointer): void => {
-            pointers.delete(pointer.id);
-        };
-        button.on('pointerup', release);
-        button.on('pointerout', release);
-        button.on('pointerupoutside', release);
-    }
+    /**
+     * Movement, Jump, and Fire come from the shared control deck, so the
+     * playfield keeps no in-canvas thumb buttons of its own.
+     */
+    private readonly handleControlEvent = (event: ControlEvent): void => {
+        if (!this.canInteract()) {
+            this.deckLeft = false;
+            this.deckRight = false;
+            this.deckDown = false;
+            this.deckJump = false;
+            this.deckFire = false;
+            return;
+        }
+        if (event.kind === 'direction') {
+            const held = event.phase === 'press';
+            if (event.direction === 'left') this.deckLeft = held;
+            if (event.direction === 'right') this.deckRight = held;
+            if (event.direction === 'down') this.deckDown = held;
+            return;
+        }
+        if (event.kind !== 'button') return;
+        if (event.id === 'jump') {
+            if (event.phase === 'press' && !this.deckJump) this.jumpPressed = true;
+            this.deckJump = event.phase === 'press';
+            return;
+        }
+        if (event.id === 'fire') {
+            if (event.phase === 'press' && !this.deckFire) this.firePressed = true;
+            this.deckFire = event.phase === 'press';
+        }
+    };
 
     private handleEvents(events: readonly PlatformerEvent[]): void {
         for (const event of events) {
@@ -483,11 +490,27 @@ export class PlatformerScene extends Phaser.Scene {
             if (platform.surfaceKind === 'crumbling' && (dynamic?.crumbleDisabledMs ?? 0) > 0) {
                 continue;
             }
+            // A crumbling floor shakes harder the closer it is to giving way, so
+            // standing on one is a warning rather than a surprise.
+            const contactMs = platform.surfaceKind === 'crumbling'
+                ? (dynamic?.crumbleContactMs ?? 0)
+                : 0;
+            const shake = contactMs > 0 && !this.reducedMotion
+                ? Math.sin(this.state.activeElapsedMs / 26) *
+                    Math.min(3, 0.6 + contactMs / 220)
+                : 0;
+            const drawn = {...rect, x: rect.x + shake};
             graphics.fillStyle(surfaceColor(platform.surfaceKind))
-                .fillRect(rect.x, rect.y, rect.width, rect.height);
+                .fillRect(drawn.x, drawn.y, drawn.width, drawn.height);
             graphics.lineStyle(2, COLORS.paper, 0.35)
-                .lineBetween(rect.x, rect.y, rect.x + rect.width, rect.y);
-            this.drawSurfaceCue(graphics, rect, platform.surfaceKind, platform.conveyorVelocity);
+                .lineBetween(drawn.x, drawn.y, drawn.x + drawn.width, drawn.y);
+            this.drawSurfaceCue(
+                graphics,
+                drawn,
+                platform.surfaceKind,
+                platform.conveyorVelocity,
+                contactMs
+            );
             if (platform.surfaceKind === 'lift') {
                 graphics.lineStyle(2, COLORS.lift, 0.7)
                     .lineBetween(
@@ -531,6 +554,7 @@ export class PlatformerScene extends Phaser.Scene {
             );
         }
         this.drawCollectibles(graphics);
+        this.syncCollectibleLabels();
         this.drawEnemies(graphics);
         for (const projectile of this.state.projectiles) {
             graphics.fillStyle(projectile.owner === 'player' ? COLORS.cyan : COLORS.danger)
@@ -564,12 +588,29 @@ export class PlatformerScene extends Phaser.Scene {
         graphics: Phaser.GameObjects.Graphics,
         rect: {readonly x: number; readonly y: number; readonly width: number; readonly height: number},
         surface: PlatformerSurfaceKind,
-        conveyorVelocity: number
+        conveyorVelocity: number,
+        crumbleContactMs = 0
     ): void {
         if (surface === 'ice') {
-            graphics.lineStyle(2, COLORS.paper, 0.75);
-            for (let x = rect.x + 8; x < rect.x + rect.width - 8; x += 24) {
-                graphics.lineBetween(x, rect.y + 4, x + 12, rect.y + 12);
+            // Sheen band, facet cracks, and hanging icicles: unmistakably ice
+            // rather than a differently coloured floor.
+            graphics.fillStyle(0xdff6ff, 0.5)
+                .fillRect(rect.x + 2, rect.y + 2, rect.width - 4, 4);
+            graphics.lineStyle(1, 0xffffff, 0.85);
+            for (let x = rect.x + 8; x < rect.x + rect.width - 8; x += 22) {
+                graphics.lineBetween(x, rect.y + 3, x + 10, rect.y + 11);
+                graphics.lineBetween(x + 10, rect.y + 11, x + 4, rect.y + 16);
+            }
+            graphics.fillStyle(0xcdeeff, 0.9);
+            for (let x = rect.x + 14; x < rect.x + rect.width - 10; x += 30) {
+                graphics.fillTriangle(
+                    x,
+                    rect.y + rect.height,
+                    x + 5,
+                    rect.y + rect.height,
+                    x + 2.5,
+                    rect.y + rect.height + 8
+                );
             }
         } else if (surface === 'conveyor') {
             const direction = conveyorVelocity < 0 ? -1 : 1;
@@ -589,10 +630,26 @@ export class PlatformerScene extends Phaser.Scene {
                 graphics.lineBetween(x, rect.y, x - 7, rect.y + 13);
                 graphics.lineBetween(x - 7, rect.y + 13, x + 5, rect.y + 20);
             }
+            if (crumbleContactMs > 0) {
+                // Dust falls from the underside while the floor is failing.
+                graphics.fillStyle(0xcbb894, 0.85);
+                for (let x = rect.x + 10; x < rect.x + rect.width - 6; x += 18) {
+                    const drift = (this.state.activeElapsedMs / 6 + x) % 16;
+                    graphics.fillRect(x, rect.y + rect.height + drift, 2, 3);
+                }
+            }
         } else if (surface === 'bounce') {
-            graphics.lineStyle(2, COLORS.paper, 0.75);
-            for (let x = rect.x + 12; x < rect.x + rect.width; x += 28) {
-                graphics.strokeTriangle(x, rect.y + 13, x + 7, rect.y + 2, x + 14, rect.y + 13);
+            // Real coil springs under a bounce plate, with the plate on top.
+            const coilTop = rect.y + 3;
+            graphics.fillStyle(0x9aa2ad, 1)
+                .fillRect(rect.x + 2, rect.y, rect.width - 4, 4);
+            graphics.lineStyle(2, 0xd8dce4, 0.95);
+            for (let x = rect.x + 12; x < rect.x + rect.width - 8; x += 26) {
+                for (let coil = 0; coil < 3; coil++) {
+                    const coilY = coilTop + 5 + coil * 5;
+                    graphics.lineBetween(x, coilY, x + 12, coilY + 2.5);
+                    graphics.lineBetween(x + 12, coilY + 2.5, x, coilY + 5);
+                }
             }
         }
     }
@@ -647,46 +704,140 @@ export class PlatformerScene extends Phaser.Scene {
         }
     }
 
+    /**
+     * Static name tags over every pickup, created once. Shape and colour alone
+     * never told the player what a collectible actually was.
+     */
+    private createCollectibleLabels(): void {
+        for (const item of this.level.collectibles) {
+            const label = this.add.text(item.x, item.y - 24, COLLECTIBLE_LABELS[item.kind], {
+                color: '#f5f0df',
+                backgroundColor: 'rgba(16,22,26,0.74)',
+                fontFamily: 'Georgia, serif',
+                fontSize: '11px',
+                padding: {x: 3, y: 1}
+            }).setOrigin(0.5).setDepth(11);
+            this.collectibleLabels.set(item.id, label);
+        }
+    }
+
+    private syncCollectibleLabels(): void {
+        for (const item of this.level.collectibles) {
+            const label = this.collectibleLabels.get(item.id);
+            if (!label) continue;
+            const taken = this.state.collectedCoreIds.includes(item.id) ||
+                this.state.collectedSalvageIds.includes(item.id) ||
+                this.state.collectedPickupIds.includes(item.id);
+            label.setVisible(!taken);
+        }
+    }
+
+    /**
+     * Each hostile reads as a creature rather than a coloured block: legs that
+     * walk, wings that beat, a coiled jumper, and shelled emplacements.
+     */
     private drawEnemies(graphics: Phaser.GameObjects.Graphics): void {
+        const clock = this.reducedMotion ? 0 : this.state.activeElapsedMs;
         for (const enemy of this.state.enemies) {
             if (enemy.health <= 0) continue;
             const color = enemy.kind === 'sentry' ? COLORS.enemyArmored : COLORS.enemy;
+            const dark = 0x2a1f2c;
             if (enemy.kind === 'drone') {
-                graphics.fillStyle(color).fillTriangle(
-                    enemy.x - 17,
-                    enemy.y,
-                    enemy.x,
-                    enemy.y - 12,
-                    enemy.x + 17,
-                    enemy.y
+                // Beating wings above a bulbous body with a stinger tail.
+                const beat = Math.sin(clock / 55) * 6;
+                graphics.fillStyle(0xd6e6ff, 0.55);
+                graphics.fillTriangle(
+                    enemy.x - 4, enemy.y - 6,
+                    enemy.x - 22, enemy.y - 12 - beat,
+                    enemy.x - 6, enemy.y + 1
                 );
-                graphics.fillCircle(enemy.x, enemy.y, 8);
-            } else if (enemy.kind === 'turret') {
-                graphics.fillStyle(color).fillRect(enemy.x - 14, enemy.y - 20, 28, 20);
-                graphics.lineStyle(5, color).lineBetween(
+                graphics.fillTriangle(
+                    enemy.x + 4, enemy.y - 6,
+                    enemy.x + 22, enemy.y - 12 + beat,
+                    enemy.x + 6, enemy.y + 1
+                );
+                graphics.fillStyle(color).fillEllipse(enemy.x, enemy.y - 2, 24, 17);
+                graphics.fillStyle(dark);
+                graphics.fillTriangle(
+                    enemy.x - enemy.facing * 12, enemy.y - 1,
+                    enemy.x - enemy.facing * 22, enemy.y + 6,
+                    enemy.x - enemy.facing * 11, enemy.y + 4
+                );
+                graphics.fillStyle(color).fillCircle(enemy.x + enemy.facing * 9, enemy.y - 6, 7);
+            } else if (enemy.kind === 'turret' || enemy.kind === 'sentry') {
+                // A shelled crawler dug in on its legs, snout tracking the room.
+                graphics.fillStyle(dark);
+                for (const offset of [-10, -3, 4, 11]) {
+                    graphics.fillRect(enemy.x + offset, enemy.y - 6, 3, 8);
+                }
+                graphics.fillStyle(color).fillEllipse(enemy.x, enemy.y - 13, 32, 22);
+                graphics.fillStyle(dark, 0.35);
+                graphics.fillEllipse(enemy.x, enemy.y - 16, 22, 11);
+                graphics.lineStyle(6, color).lineBetween(
                     enemy.x,
                     enemy.y - 15,
                     enemy.x + enemy.facing * 24,
                     enemy.y - 15
                 );
+                graphics.fillStyle(dark)
+                    .fillCircle(enemy.x + enemy.facing * 24, enemy.y - 15, 4);
             } else {
                 const crouch = enemy.mode === 'crouch' ? 8 : 0;
-                graphics.fillStyle(color).fillRoundedRect(
-                    enemy.x - 14,
-                    enemy.y - 28 + crouch,
-                    28,
-                    28 - crouch,
-                    6
-                );
+                const step = Math.sin(clock / 130) * 5;
+                graphics.lineStyle(3, dark, 1);
                 if (enemy.kind === 'hopper') {
-                    graphics.lineStyle(3, COLORS.paper)
-                        .lineBetween(enemy.x - 10, enemy.y, enemy.x - 15, enemy.y + 8)
-                        .lineBetween(enemy.x + 10, enemy.y, enemy.x + 15, enemy.y + 8);
+                    // Coiled haunches, tucked when crouching to spring.
+                    graphics.lineBetween(
+                        enemy.x - 8, enemy.y - 6,
+                        enemy.x - 13, enemy.y - (crouch > 0 ? 2 : 0)
+                    );
+                    graphics.lineBetween(
+                        enemy.x - 13, enemy.y - (crouch > 0 ? 2 : 0),
+                        enemy.x - 9, enemy.y
+                    );
+                    graphics.lineBetween(
+                        enemy.x + 8, enemy.y - 6,
+                        enemy.x + 13, enemy.y - (crouch > 0 ? 2 : 0)
+                    );
+                    graphics.lineBetween(
+                        enemy.x + 13, enemy.y - (crouch > 0 ? 2 : 0),
+                        enemy.x + 9, enemy.y
+                    );
+                } else {
+                    graphics.lineBetween(enemy.x - 7, enemy.y - 6, enemy.x - 7 - step, enemy.y);
+                    graphics.lineBetween(enemy.x + 7, enemy.y - 6, enemy.x + 7 + step, enemy.y);
+                }
+                graphics.fillStyle(color).fillEllipse(
+                    enemy.x,
+                    enemy.y - 16 + crouch / 2,
+                    28,
+                    24 - crouch
+                );
+                // Head, snout, and a pair of spines along the back.
+                graphics.fillCircle(enemy.x + enemy.facing * 10, enemy.y - 24 + crouch, 8);
+                graphics.fillStyle(dark);
+                graphics.fillTriangle(
+                    enemy.x + enemy.facing * 15, enemy.y - 25 + crouch,
+                    enemy.x + enemy.facing * 22, enemy.y - 22 + crouch,
+                    enemy.x + enemy.facing * 15, enemy.y - 20 + crouch
+                );
+                graphics.fillStyle(color);
+                for (const spine of [-9, -2, 5]) {
+                    graphics.fillTriangle(
+                        enemy.x + spine, enemy.y - 26 + crouch,
+                        enemy.x + spine + 3, enemy.y - 33 + crouch,
+                        enemy.x + spine + 6, enemy.y - 26 + crouch
+                    );
                 }
             }
+            const eyeY = enemy.kind === 'drone'
+                ? enemy.y - 7
+                : enemy.kind === 'turret' || enemy.kind === 'sentry'
+                    ? enemy.y - 17
+                    : enemy.y - 25 + (enemy.mode === 'crouch' ? 8 : 0);
             graphics.fillStyle(COLORS.accent).fillCircle(
-                enemy.x + enemy.facing * 6,
-                enemy.y - 17,
+                enemy.x + enemy.facing * (enemy.kind === 'patroller' ? 12 : 8),
+                eyeY,
                 3
             );
             if (enemy.mode === 'aim') {
@@ -806,9 +957,12 @@ export class PlatformerScene extends Phaser.Scene {
         this.keyboardFire = false;
         this.jumpPressed = false;
         this.firePressed = false;
-        this.touchLeft.clear();
-        this.touchRight.clear();
-        this.touchJump.clear();
+        this.keyboardDown = false;
+        this.deckLeft = false;
+        this.deckRight = false;
+        this.deckDown = false;
+        this.deckJump = false;
+        this.deckFire = false;
     }
 
     private finish(status: 'success' | 'failure' | 'abandoned'): void {

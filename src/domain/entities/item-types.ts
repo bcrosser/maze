@@ -286,6 +286,40 @@ export const ITEM_DEFINITIONS = Object.freeze({
     })
 } as const satisfies Record<ItemTypeId, ItemDefinition>);
 
+/**
+ * Text glyphs for DOM surfaces that cannot draw the sprite atlas, such as the
+ * quick-slot buttons and the help legend. Shape, not colour, carries meaning.
+ */
+export const ITEM_GLYPHS = Object.freeze({
+    'health-potion': '✚',
+    antidote: '✜',
+    'revival-feather': '❦',
+    'fire-ward': '▲',
+    'ice-ward': '❄',
+    'lightning-ward': '⚡',
+    lantern: '☀',
+    compass: '✦',
+    'map-scroll': '▤',
+    multitool: '⚒',
+    'mining-pick': '⛏',
+    bomb: '✹',
+    'snare-kit': '⩗',
+    axe: '⚒',
+    sword: '⚔',
+    dagger: '†',
+    spear: '↑',
+    bow: '➹',
+    'ammo-bundle': '➶',
+    shield: '⛨',
+    coin: '¤',
+    'mystery-orb': '◍',
+    car: '⛟'
+} as const satisfies Record<ItemTypeId, string>);
+
+export function getItemGlyph(baseTypeId: ItemTypeId): string {
+    return ITEM_GLYPHS[baseTypeId];
+}
+
 export function createItemInstance(
     id: string,
     baseTypeId: ItemTypeId,

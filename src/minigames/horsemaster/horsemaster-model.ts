@@ -1094,8 +1094,16 @@ function applyVerticalInput(
         );
         return;
     }
+    if (player.row < 1) return;
+    if (player.row > MEDIAN_ROW) {
+        // Retreating out of the traffic section is essential: without it a horse
+        // riding a machine on a car about to leave the screen has no escape.
+        // It is a committed vehicle-length jump like the forward hop, and a
+        // ride is abandoned at takeoff.
+        startHop(state, events, 'vehicle', player.x, player.row - 1);
+        return;
+    }
     if (player.ride !== null) return;
-    if (player.row < 1 || player.row > MEDIAN_ROW) return;
     startHop(state, events, 'grid', player.x, player.row - 1);
 }
 

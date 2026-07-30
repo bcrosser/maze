@@ -137,6 +137,37 @@
         .hud-row-primary .stat-value {
             color: var(--stat-accent, var(--accent));
         }
+        /* Small in-HUD affordances such as retargeting the tracked objective. */
+        .stat-btn {
+            grid-column: 3;
+            grid-row: 1 / span 2;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 30px;
+            min-height: 30px;
+            padding: 0;
+            border: 1px solid var(--line);
+            border-radius: 4px;
+            background: var(--panel);
+            color: var(--stat-accent, var(--accent));
+            font-family: inherit;
+            font-size: 1em;
+            line-height: 1;
+            cursor: pointer;
+            touch-action: manipulation;
+        }
+        .stat-btn:active {
+            background: var(--accent);
+            color: var(--panel);
+        }
+        .stat-btn:focus-visible {
+            outline: 2px solid #fff4b8;
+            outline-offset: -2px;
+        }
+        .hud-stat:has(.stat-btn) {
+            grid-template-columns: auto minmax(0, 1fr) auto;
+        }
         [data-stat="health"] { --stat-accent: #ff7a70; }
         [data-stat="objective"] { --stat-accent: #6fd3ff; }
         [data-stat="exit"] { --stat-accent: #8fd66a; }
@@ -201,12 +232,17 @@
             align-items: center;
             width: 100%;
             min-width: 0;
+            min-height: 0;
             height: clamp(112px, 23dvh, 196px);
             padding: 5px;
             border: 1px solid var(--line);
             border-radius: 6px;
             background: var(--panel);
             touch-action: none;
+        }
+        /* Button-only schemes such as the card tables drop the pad column. */
+        #control-deck[data-stick="none"] {
+            grid-template-columns: minmax(0, 1fr);
         }
         #move-pad {
             position: relative;
@@ -270,6 +306,13 @@
             background: var(--accent);
             transition: none;
         }
+        #action-column {
+            display: grid;
+            grid-template-rows: auto minmax(0, 1fr);
+            gap: 5px;
+            min-width: 0;
+            height: 100%;
+        }
         #action-pad {
             display: grid;
             grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -277,6 +320,27 @@
             gap: 5px;
             min-width: 0;
             height: 100%;
+        }
+        #quick-slot-row {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 5px;
+            min-width: 0;
+        }
+        .quick-slot-btn {
+            flex-direction: row;
+            gap: 4px;
+            min-height: 44px;
+        }
+        .quick-slot-btn[data-filled="false"] {
+            color: var(--muted);
+            opacity: 0.72;
+        }
+        .action-label {
+            overflow: hidden;
+            max-width: 100%;
+            text-overflow: ellipsis;
+            white-space: nowrap;
         }
         .action-btn {
             display: flex;
@@ -314,6 +378,30 @@
         .action-btn:focus-visible {
             outline: 3px solid #fff4b8;
             outline-offset: -3px;
+        }
+
+        /*
+         * Very short viewports cannot fit a 44px quick-slot row plus two rows of
+         * 40px actions inside the deck's clamped height, so the floors relax
+         * rather than letting the deck push the pad off screen.
+         */
+        @media (max-height: 640px) {
+            #control-deck {
+                padding: 3px;
+                gap: 4px;
+            }
+            #action-column,
+            #action-pad,
+            #quick-slot-row {
+                gap: 4px;
+            }
+            .action-btn {
+                min-height: 32px;
+                font-size: clamp(9px, 2.2vw, 12px);
+            }
+            .quick-slot-btn {
+                min-height: 32px;
+            }
         }
 
         .hidden {
@@ -439,6 +527,10 @@
             #move-pad {
                 height: clamp(72px, 15dvh, 116px);
             }
+            #action-column {
+                width: 100%;
+                height: auto;
+            }
             #action-pad {
                 width: 100%;
                 height: auto;
@@ -494,6 +586,13 @@
                         <span class="stat-icon" aria-hidden="true">&#9670;</span>
                         <span class="stat-label">Objective</span>
                         <span class="stat-value" id="objective">Pipe</span>
+                        <button
+                            id="objective-cycle"
+                            class="stat-btn"
+                            type="button"
+                            aria-label="Track the next objective"
+                            title="Track the next objective"
+                        >&#8635;</button>
                     </span>
                     <span class="hud-stat" data-stat="exit">
                         <span class="stat-icon" aria-hidden="true">&#9873;</span>
@@ -536,6 +635,13 @@
                         <span class="stat-icon" aria-hidden="true">&#10022;</span>
                         <span class="stat-label">Status</span>
                         <span class="stat-value" id="player-status">Clear</span>
+                        <button
+                            id="maze-help"
+                            class="stat-btn"
+                            type="button"
+                            aria-label="Show the maze legend"
+                            title="Show the maze legend"
+                        >?</button>
                     </span>
                 </div>
                 <button
@@ -586,44 +692,16 @@
                         aria-label="Move down"
                     >&#8595;</button>
                 </div>
-                <div id="action-pad" role="group" aria-label="Actions">
-                    <button
-                        class="action-btn"
-                        type="button"
-                        id="control-attack"
-                        data-stat="weapon"
-                        aria-pressed="false"
-                    ><span class="action-icon" aria-hidden="true">&#9876;</span>Attack</button>
-                    <button
-                        class="action-btn"
-                        type="button"
-                        id="control-use"
-                        data-stat="health"
-                    ><span class="action-icon" aria-hidden="true">&#10010;</span>Use</button>
-                    <button
-                        class="action-btn"
-                        type="button"
-                        id="control-interact"
-                        data-stat="objective"
-                    ><span class="action-icon" aria-hidden="true">&#9678;</span>Interact</button>
-                    <button
-                        class="action-btn"
-                        type="button"
-                        id="control-wait"
-                        data-stat="status"
-                    ><span class="action-icon" aria-hidden="true">&#9202;</span>Wait</button>
-                    <button
-                        class="action-btn"
-                        type="button"
-                        id="control-inventory"
-                        data-stat="pack"
-                    ><span class="action-icon" aria-hidden="true">&#9636;</span>Items</button>
-                    <button
-                        class="action-btn"
-                        type="button"
-                        id="control-menu"
-                        data-stat="level"
-                    ><span class="action-icon" aria-hidden="true">&#9776;</span>Menu</button>
+                <div id="action-column">
+                    <!-- Both groups are filled at runtime from the active
+                         scene's control scheme. -->
+                    <div
+                        id="quick-slot-row"
+                        class="hidden"
+                        role="group"
+                        aria-label="Quick slots"
+                    ></div>
+                    <div id="action-pad" role="group" aria-label="Actions"></div>
                 </div>
             </div>
         </main>

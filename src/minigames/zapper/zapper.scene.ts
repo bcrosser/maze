@@ -1,5 +1,7 @@
 import Phaser from 'phaser';
 
+import {getControlDeck} from '../../app/control-deck-host';
+import {ZAPPER_CONTROL_SCHEME, type ControlEvent} from '../../app/control-scheme';
 import type {PerformanceGrade} from '../../domain/campaign/campaign-state';
 import {Mulberry32Random} from '../../domain/random/random-source';
 import type {
@@ -192,9 +194,11 @@ export class ZapperScene extends Phaser.Scene {
         this.createControls();
         this.input.keyboard?.on('keydown', this.handleKeyDown);
         this.input.keyboard?.on('keyup', this.handleKeyUp);
+        getControlDeck(this)?.setScheme(ZAPPER_CONTROL_SCHEME, this.handleControlEvent);
         this.events.once('shutdown', () => {
             this.input.keyboard?.off('keydown', this.handleKeyDown);
             this.input.keyboard?.off('keyup', this.handleKeyUp);
+            getControlDeck(this)?.clearScheme(ZAPPER_CONTROL_SCHEME.id);
             this.finishTimer?.remove(false);
             this.clearDatasets();
         });
@@ -272,30 +276,31 @@ export class ZapperScene extends Phaser.Scene {
     };
 
     private createControls(): void {
-        this.createButton(55, 610, 78, '▲ LANE', () => {
-            this.pendingLaneDelta = -1;
-        });
-        this.createButton(143, 610, 78, '▼ LANE', () => {
-            this.pendingLaneDelta = 1;
-        });
-        const fill = this.createButton(307, 610, 210, 'HOLD · FILL WITH SLIME', () => {}, 54, 0x267b49);
-        const startFill = (): void => {
-            if (!this.finishing && !this.helpOpen) this.chargeHeld = true;
-        };
-        const stopFill = (): void => {
-            this.chargeHeld = false;
-        };
-        fill.button.removeAllListeners('pointerdown');
-        fill.button.on('pointerdown', startFill);
-        fill.button.on('pointerup', stopFill);
-        fill.button.on('pointerout', stopFill);
-        fill.button.on('pointerupoutside', stopFill);
-        this.createButton(548, 610, 214, 'SLIDE BLASTER', () => {
-            this.pendingAction = true;
-        }, 54, 0x60408f);
+        // Lane, Fill, and Slide live on the shared control deck; the canvas
+        // keeps only its corner utilities.
         this.createButton(42, 20, 68, 'EXIT', () => this.finish('abandoned'), 34, 0x743943);
         this.createButton(630, 20, 68, 'HELP', () => this.showHelp(), 34, 0x285a68);
     }
+
+    private readonly handleControlEvent = (event: ControlEvent): void => {
+        if (this.finishing) return;
+        if (this.helpOpen) {
+            if (event.kind === 'button' && event.phase === 'press') this.closeHelp();
+            return;
+        }
+        if (event.kind === 'direction') {
+            if (event.phase !== 'press') return;
+            if (event.direction === 'up') this.pendingLaneDelta = -1;
+            if (event.direction === 'down') this.pendingLaneDelta = 1;
+            return;
+        }
+        if (event.kind !== 'button') return;
+        if (event.id === 'fill') {
+            this.chargeHeld = event.phase === 'press';
+            return;
+        }
+        if (event.id === 'slide' && event.phase === 'press') this.pendingAction = true;
+    };
 
     private createButton(
         x: number,

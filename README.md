@@ -6,19 +6,19 @@ A playable TypeScript and Phaser checkpoint for a multi-genre game set inside a 
 
 The default game now includes a replayable, seeded campaign loop:
 
-1. Explore a fresh Wilson-generated material maze with persistent loot, weapons, mining, traps, telegraphed monsters, recoverable defeat, pause, and autosave.
+1. Explore a fresh Wilson-generated material maze with textured walls, a subtly marked floor, persistent loot, weapons, visible mining charges, traps, fourteen telegraphed monster archetypes, floating damage numbers, recoverable defeat, pause, and autosave.
 2. Find a stable, randomized objective roster drawn from eight required minigames. Levels 1–4 offer four games; levels 5, 6, 7, and 8 offer five, six, seven, and all eight respectively.
-3. Find guaranteed Blackjack and Texas Hold’em tables on every level, wager persistent money against computer players, and spend monster rewards or winnings at shops that appear on some levels.
+3. Find guaranteed Blackjack and Texas Hold’em tables on every level, wager persistent money against computer players, and spend monster rewards or winnings at shops that appear on some levels. Shops also buy salvage and carried loot, and their prices climb with the level.
 4. Route fixed-orientation pipe pieces ahead of advancing liquid, then pick a readable pin-tumbler lock.
 5. Fly a continuous-motion horizontal assault with charge shots, bombs, add-ons, escalating formations, and the Corridor Warden boss.
 6. Cross a seeded platformer assembled from reachable sections, collect every required power core, use temporary weapons, and survive enemies and material-driven surfaces.
 7. Play Circuit Crash on a certified-solvable 8×8 board, using circuit specials and limited boosters to clear every short before moves run out.
 8. Become Horsemaster in a Frogger-style crossing: hop a horse through bicycle traffic to the median, ride the exercise machines mounted on passing buses and cars, and finish through the door of the one true Ultra Horse Gym among five buildings.
 9. Run Zapper's alien nanotech counter: fill slime-powered space blasters, slide them to waiting customers, and catch the completed guns before they fall.
-10. Unlock Casino Heist by finding a rare Getaway Car in the maze or buying one from a shop for exactly `$100`, then survive an armed highway escape for a `$1000` payout.
+10. Unlock Casino Heist by finding a rare Getaway Car in the maze or buying one from a shop for exactly `$100`, then flee the robbed casino through slower traffic, splitting carriageways, ramming police, and spike-dropping helicopters, and drop into a marked storm drain for a `$1000` payout.
 11. Complete as many selected minigames as the level number: one on level 1 through all eight on level 8. Levels 1–7 award a persistent reward and generate the next maze. Completing all eight objectives on level 8 ends the campaign with a fanfare and dancing horse.
 
-New campaigns use Web Crypto entropy. Named deterministic seed streams keep an unfinished level stable across refreshes while a new campaign rerolls its maze, objectives, optional services, loot features, monsters, traps, and encounters. While the overworld is active, a new money-bearing monster enters every deterministic 30–60 seconds, up to eight living monsters; the saved countdown resumes after refresh. Slot 1 uses the version-4 save format and migrates valid version-1, version-2, and version-3 saves without regenerating their current maze.
+New campaigns use Web Crypto entropy. Named deterministic seed streams keep an unfinished level stable across refreshes while a new campaign rerolls its maze, objectives, optional services, loot features, monsters, traps, and encounters. While the overworld is active, a new money-bearing monster enters every deterministic 30–60 seconds, up to eight living monsters; the saved countdown resumes after refresh. Slot 1 uses the version-5 save format and migrates valid version-1 through version-4 saves without regenerating their current maze.
 
 This is not the complete planned game. Distinct later acts, additional lock families, unique level content, final art/audio, settings, save-slot UI, and broader content remain to be built.
 
@@ -91,18 +91,26 @@ When an id is present the standard `gtag.js` loader and `gtag('config', ...)` sn
 
 ## Controls
 
-- Overworld: arrows/WASD or the D-pad move and bump-attack. `F`/Attack selects a ranged direction, `Q`/Use activates the first quick slot, `E` interacts or disarms, `I` opens the backpack, and `.` or Space waits.
+Every scene shares one on-screen control deck below the canvas: the drag-anywhere
+movement pad plus at most six labelled buttons. Each scene declares a control
+scheme (`src/app/control-scheme.ts`), so the buttons are relabelled per game and a
+game that needs two buttons shows two wide buttons rather than four dead ones.
+Positional interactions stay in the canvas: pipe cells, circuit chips, the lock
+pins and tension bar, the safe dial, the Space drag-to-fly area, and the corner
+EXIT/HELP buttons.
+
+- Overworld: arrows/WASD or the pad move and bump-attack. `F`/Attack selects a ranged direction, `1`–`3` or the three quick-slot buttons use assigned items, `E`/Interact interacts or disarms, `I`/Items opens the backpack, `H` or the HUD `?` opens the maze legend, `.` or Space waits, and the `↻` beside the Objective readout tracks a different objective.
 - Pipe routing: tap/click a dry cell to place the next fixed-orientation piece. The liquid and its per-joint timer start together after the guide, with a slow eight-second Standard flow step. Replacing a dry piece is allowed but advances the liquid clock. When the route is ready, press **Finish Placing** or `F` to lock the layout and run the visible coolant at 4× speed. Arrows move the cursor and Enter/Space places.
 - Lock: follow the numbered gold `NEXT` marker, keep tension inside its shown feedback band, and lift each distinct pin seam to gold. The next binding pin is selected automatically; when all pins are cyan, tap `TURN NOW`.
 - Space: at an available Spaceship landmark, fly the mission or pay `$100` to clear the objective. During the mission, arrows/WASD or drag movement is continuous. Hold and release primary fire for charged shots; `B` or the alternate touch button spends a bomb. Fire is always manual. A visible bar counts down from 5:00 on level tier 0, gains 30 seconds per tier up to 7:30, and turns urgent for the final 30 seconds. The introductory Warden has 46 total component health; its health rises gradually with the same tier progression. A critical one-HP core remains exposed for the finishing shot, and destroying it on the exact zero frame still wins. If time expires first, the result explicitly reports that the Warden escaped in a bounded two-line card. A result card ignores Space/fire input and closes only with a deliberate Enter, Escape, or button choice.
-- Platformer: arrows/A/D move, Up/W/Space jumps, and `F` fires a collected weapon. Two-thumb touch controls support movement, jump, and fire.
+- Platformer: arrows/A/D move, Up/W/Space jumps, Down/S drops through a raised platform, and `F` fires a collected weapon. Crumbling floors shake and shed dust before they fail, ice shows facets and icicles, and bounce plates show their springs. Every pickup carries a name tag.
 - Circuit Crash: tap two neighboring chips, or move with arrows/WASD and press Enter/Space, to swap. Clear all red short-circuit overlays within 18 moves. `1` Overclocks, `2` traces a recommended move, `3` arms a targeted pulse, and `4` reroutes the board. Every failed or abandoned retry receives a new certified board.
-- Horsemaster: Arrows/WASD (or the touch d-pad and the large HOP button) hop the horse one tile in four directions. Dodge the five lanes of bicycles on hoof, rest on the safe median, then ride the treadmills and exercise bikes mounted on traffic: green buses are slow with two machine slots, yellow cars have one slot, and red cars are faster. Riding off the screen edge, touching a bicycle, missing a machine, or hitting the wrong building door each cost a heart; finish through the marked GYM door before three hearts are gone.
-- Zapper: use Up/Down or the lane buttons, hold `F`/Fill to load a blaster with slime, then press Enter/Space/`E` or Slide to send it to the waiting alien. Move into the same lane to catch the completed returning gun, then press the action again to hand it over. Complete the tier-scaled shift quota before three mistakes end the shift.
-- Casino Heist: first acquire the Getaway Car as rare maze loot or buy it for exactly `$100`. Steer continuously with arrows/A/D or touch, dodge obstacles, spiked luxury cars, and their forward-firing guns, and use Fire only after collecting a road weapon. The car starts unarmed, ammunition is finite, and additional road pickups keep the escape armed. Survive to the casino exit to steal `$1000`.
+- Horsemaster: Arrows/WASD (or the pad and the HOP button) hop the horse one tile in four directions. Dodge the five lanes of bicycles on hoof, rest on the safe median, then ride the treadmills and exercise bikes mounted on traffic: green buses are slow with two machine slots, yellow cars have one slot, and red cars are faster. Down hops **back** a lane even mid-ride, so a machine heading for the screen edge is escapable; the landing still has to find a machine or the median. Riding off the screen edge, touching a bicycle, missing a machine, or hitting the wrong building door each cost a heart; finish through the marked GYM door before three hearts are gone.
+- Zapper: use Up/Down or the pad to change lane, hold `F`/Fill to load a blaster with slime, then press Enter/Space/`E` or Slide to send it to the waiting alien. Blasters slide briskly, and customers arrive close enough together that several lanes are live at once. Move into the same lane to catch the completed returning gun, then press the action again to hand it over. Complete the tier-scaled shift quota before three mistakes end the shift.
+- Casino Heist: first acquire the Getaway Car as rare maze loot or buy it for exactly `$100`. You have just robbed the casino and the road runs away from it. Steer with arrows/A/D and drive **up or down** the road with Up/Down to close on traffic or hang back from it. Ordinary cars, buses, trucks, and motorcycles are all slower than you; the road drifts and sometimes splits around a solid divider. Cop cars and SWAT vans ram you toward the verge and shoot from a rolled-down window — and they cannot drive through traffic either, so they wreck themselves on it. Police helicopters hold station ahead and drop a partial-width spike strip unless you shoot them down. The car starts unarmed: collect the pulse gun, ammunition, and the oil-slick, smoke-screen, and flamethrower devices on the road, or buy them as permanent car modules at a maze shop. `Q`/Deploy spends the armed device, `E`/Switch arms the next one. Reach the marked turn-off and drop into the storm drain to vanish with `$1000`; drive past it and the road runs out.
 - Blackjack: choose an even wager and Deal, then use Hit, Stand, or Double. Keyboard shortcuts are Enter, `H`, `S`, and `D`; every control is also tappable.
 - Texas Hold’em: choose an ante and Deal, then Fold, Check/Call, Bet, or Raise through preflop, flop, turn, and river. The computer acts automatically, and another hand can be dealt immediately.
-- Shop: stand on a `$` marker and interact to buy consumables, upgraded weapons, permanent upgrades, or the `$100` Getaway Car. Use Left/Right or Page Up/Page Down to change pages and `1`–`4` to buy by keyboard. Shops normally appear on a deterministic 60% of generated levels; a level that selects a still-locked Casino Heist guarantees access to a shop so the campaign cannot deadlock.
+- Shop: stand on a `$` marker and interact to buy consumables, upgraded weapons, permanent upgrades, Expedition Packs that widen the backpack, Getaway Car modules, or the `$100` Getaway Car. Use Left/Right or Page Up/Page Down to change pages and `1`–`4` to buy by keyboard. **SELL** opens the counter that buys salvage at `$2` each and buys carried loot; quick-slotted items are never sold out from under you. Prices rise 30% of base per level, and each Expedition Pack costs twice the last. Shops normally appear on a deterministic 60% of generated levels; a level that selects a still-locked Casino Heist guarantees access to a shop so the campaign cannot deadlock.
 - Escape or the HUD menu pauses where appropriate. Encounter close buttons abandon with a recoverable consequence.
 - Restart Game clears checkpoint slot 1 and starts a fresh campaign.
 
@@ -112,7 +120,9 @@ Useful maze loot now follows the player into minigames as a visible passive bonu
 
 ## Project layout
 
-- `src/domain/`: framework-independent campaign, maze, movement, item, monster, and random-seed rules.
+- `src/app/`: the DOM shell, the shared control deck, and the per-scene control schemes.
+- `src/content/`: shared procedural art such as the horse drawn by both Horsemaster and the victory screen.
+- `src/domain/`: framework-independent campaign, maze, movement, item, monster, weapon-stat, and random-seed rules.
 - `src/encounters/`: validated encounter contracts and atomic result application.
 - `src/minigames/`: pure models and Phaser scenes for Pipe, Lock, Space, Platformer, Circuit Crash, Horsemaster, Zapper, Casino Heist, Blackjack, and Texas Hold’em play.
 - `src/scenes/`: the Phaser overworld projection and encounter orchestration.
@@ -124,7 +134,7 @@ Useful maze loot now follows the player into minigames as a visible passive bonu
 
 `MATERIALS` in `src/domain/materials/materials.ts` is the typed wall-material registry. Each entry has a stable ID, display name, color, tags, and optional mining hardness. The generated maze assigns all 24 materials to clustered wall regions.
 
-Gameplay should query materials through `getWallMaterial()` or `getAdjacentWallMaterials()`. Compare IDs, tags, or hardness rather than rendered colors. To add a material:
+Gameplay should query materials through `getWallMaterial()`, `getAdjacentWallMaterials()`, `getMaterialHardness()`, or `canMineMaterial()`. Compare IDs, tags, or hardness rather than rendered colors. Each material's tags also drive its wall texture in the overworld, so a wall's make-up is readable without relying on colour. To add a material:
 
 1. Add one entry to `MATERIALS`.
 2. Give it a distinct color and reusable gameplay tags.

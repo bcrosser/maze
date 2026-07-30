@@ -19,6 +19,7 @@ import {
     type MonsterIntent,
     type MonsterState
 } from '../entities/monster-types';
+import {getWeaponStats} from '../entities/weapon-stats';
 import type {PendingHazardState, TrapState} from '../entities/trap-types';
 import {MATERIALS, type MaterialTag} from '../materials/materials';
 import {Mulberry32Random, chooseRandom} from '../random/random-source';
@@ -38,10 +39,11 @@ import {PASSAGE_CELL, type Coordinate, type MazeCell, type MazeGrid} from './maz
 import {initializeLevelContent} from './level-content-generator';
 import {
     CASINO_HEIST_UNLOCK_FLAG,
+    getNextTrackedObjectiveId,
     OBJECTIVE_BY_ID,
     type ObjectiveId
 } from './level-objectives';
-import {getPassageDistances} from './objective-placement';
+import {getPassageDistances} from './maze-distances';
 
 export type OverworldAction =
     | {
@@ -68,6 +70,8 @@ export type OverworldAction =
     | {readonly kind: 'interact'; readonly direction?: DirectionId}
     | {readonly kind: 'disarm'; readonly direction: DirectionId}
     | {readonly kind: 'wait'}
+    /** Points the HUD at the next incomplete objective. Costs no turn. */
+    | {readonly kind: 'cycle-objective'}
     | {readonly kind: 'resolve-defeat'; readonly choice: 'feather' | 'retreat'}
     | {
         readonly kind: 'claim-sanctuary-service';
@@ -101,14 +105,27 @@ export type OverworldEvent =
     | {readonly kind: 'item-used'; readonly itemId: string; readonly message: string}
     | {readonly kind: 'monster-intent'; readonly monsterId: string; readonly message: string}
     | {readonly kind: 'monster-moved'; readonly monsterId: string; readonly message: string}
-    | {readonly kind: 'monster-damaged'; readonly monsterId: string; readonly message: string}
+    | {
+        readonly kind: 'monster-damaged';
+        readonly monsterId: string;
+        /** Health actually removed after armor, for a floating combat number. */
+        readonly amount: number;
+        readonly position: Coordinate;
+        readonly message: string;
+    }
     | {
         readonly kind: 'monster-defeated';
         readonly monsterId: string;
         readonly moneyDropped: number;
+        readonly position: Coordinate;
         readonly message: string;
     }
-    | {readonly kind: 'player-damaged'; readonly amount: number; readonly message: string}
+    | {
+        readonly kind: 'player-damaged';
+        readonly amount: number;
+        readonly position: Coordinate;
+        readonly message: string;
+    }
     | {readonly kind: 'trap'; readonly trapId: string; readonly message: string}
     | {readonly kind: 'sanctuary-service'; readonly message: string}
     | {readonly kind: 'level-reward'; readonly message: string}
@@ -220,7 +237,9 @@ function addToBackpack(
             };
         }
     }
-    if (player.backpack.length >= 8) return {player, stored: false};
+    if (player.backpack.length >= player.backpackCapacity) {
+        return {player, stored: false};
+    }
     return {player: {...player, backpack: [...player.backpack, instance]}, stored: true};
 }
 
@@ -435,24 +454,7 @@ function pickupAtPlayer(
     };
 }
 
-function weaponStats(player: PlayerProgress): {
-    readonly typeId: ItemTypeId | 'improvised';
-    readonly damage: number;
-    readonly range: number;
-    readonly piercing: number;
-} {
-    const weapon = player.equippedWeapon;
-    if (!weapon) return {typeId: 'improvised', damage: 1, range: 1, piercing: 0};
-    const definition: ItemDefinition = ITEM_DEFINITIONS[weapon.baseTypeId];
-    const qualityBonus = weapon.quality === 'rare' ? 1 : 0;
-    return {
-        typeId: weapon.baseTypeId,
-        damage: Math.min(4, (definition.baseDamage ?? 1) +
-            (weapon.affixIds.includes('keen') ? 1 : 0) + qualityBonus),
-        range: (definition.baseRange ?? 1) + (weapon.affixIds.includes('extended') ? 1 : 0),
-        piercing: weapon.affixIds.includes('piercing') ? 1 : 0
-    };
-}
+const weaponStats = getWeaponStats;
 
 function monsterAt(monsters: readonly MonsterState[], position: Coordinate): MonsterState | null {
     return monsters.find(monster => samePosition(monster.position, position)) ?? null;
@@ -545,6 +547,7 @@ function killMonster(
         kind: 'monster-defeated',
         monsterId: monster.id,
         moneyDropped,
+        position: monster.position,
         message: `${MONSTER_DEFINITIONS[monster.typeId].label} defeated. ` +
             `$${moneyDropped} recovered.`
     });
@@ -575,6 +578,8 @@ function attackMonster(
     events.push({
         kind: 'monster-damaged',
         monsterId: monster.id,
+        amount: dealt,
+        position: monster.position,
         message: `${MONSTER_DEFINITIONS[monster.typeId].label} took ${dealt} damage.`
     });
     let nextState: CampaignState = {
@@ -868,7 +873,11 @@ function applyPlayerAction(
     action: OverworldAction,
     events: OverworldEvent[]
 ): {readonly state: CampaignState; readonly valid: boolean} {
-    if (action.kind === 'resolve-defeat' || action.kind === 'choose-level-reward') {
+    if (
+        action.kind === 'resolve-defeat' ||
+        action.kind === 'choose-level-reward' ||
+        action.kind === 'cycle-objective'
+    ) {
         return {state, valid: false};
     }
     if (state.player.weaponRecoveryActions > 0 && ['melee', 'ranged'].includes(action.kind)) {
@@ -1251,7 +1260,9 @@ function prepareIntent(monster: MonsterState, state: CampaignState): MonsterInte
         };
     }
     return {
-        kind: definition.strategyId === 'sentry' ? 'ranged' : 'melee',
+        kind: definition.strategyId === 'sentry' || definition.strategyId === 'caster'
+            ? 'ranged'
+            : 'melee',
         targetPositions: [state.overworld.playerPosition],
         damage: monsterDamage(monster, state),
         executeOnTurn: state.overworld.turn + 1
@@ -1353,7 +1364,11 @@ function advanceMonsters(
         if (current.intent) continue;
         const definition = MONSTER_DEFINITIONS[current.typeId];
         const playerDistance = playerDistances.get(key(current.position)) ?? Number.POSITIVE_INFINITY;
-        const sentrySees = definition.strategyId === 'sentry' &&
+        // Sentries and casters both strike down an open corridor; the caster
+        // additionally keeps closing when it has no clear shot.
+        const shootsAtRange = definition.strategyId === 'sentry' ||
+            definition.strategyId === 'caster';
+        const sentrySees = shootsAtRange &&
             hasLineOfSight(
                 state.overworld.maze,
                 current.position,
@@ -1453,6 +1468,25 @@ function advanceMonsters(
                 state.overworld.playerPosition,
                 occupied
             );
+            // An ambusher covers ground in leaps: while still at a distance it
+            // takes a second step, so it arrives sooner than its cadence looks.
+            if (
+                next !== null &&
+                definition.strategyId === 'ambusher' &&
+                playerDistance > 2
+            ) {
+                occupied.delete(key(next));
+                const leap = stepToward(
+                    state.overworld.maze,
+                    next,
+                    state.overworld.playerPosition,
+                    occupied
+                );
+                occupied.add(key(next));
+                if (leap !== null && !samePosition(leap, state.overworld.playerPosition)) {
+                    next = leap;
+                }
+            }
         }
         const moveEvery = Math.max(1, definition.moveEveryTurns +
             (current.variantIds.includes('armored') ? 1 : 0) -
@@ -2113,6 +2147,36 @@ function resolveLevelRewardChoice(
     };
 }
 
+/**
+ * Retargets the tracked objective. This is a free HUD action: it never spends a
+ * turn, so a player comparing routes is not punished for looking.
+ */
+function resolveObjectiveCycle(state: CampaignState): OverworldActionResult {
+    const nextId = getNextTrackedObjectiveId(state);
+    if (nextId === null) {
+        return {
+            state,
+            consumedTurn: false,
+            events: [{
+                kind: 'blocked',
+                message: 'Every objective on this level is complete. Find the stairs down.'
+            }]
+        };
+    }
+    const definition = OBJECTIVE_BY_ID[nextId];
+    return {
+        consumedTurn: false,
+        state: {
+            ...state,
+            overworld: {...state.overworld, selectedObjectiveId: nextId}
+        },
+        events: [{
+            kind: 'blocked',
+            message: `Now tracking ${definition.label}.`
+        }]
+    };
+}
+
 export function resolveOverworldAction(
     state: CampaignState,
     action: OverworldAction,
@@ -2141,6 +2205,7 @@ export function resolveOverworldAction(
     }
     if (action.kind === 'resolve-defeat') return resolveDefeatChoice(state, action);
     if (action.kind === 'choose-level-reward') return resolveLevelRewardChoice(state, action);
+    if (action.kind === 'cycle-objective') return resolveObjectiveCycle(state);
     const pickupPrompt = requiredPickupChoice(state, action);
     if (pickupPrompt) {
         return {state, events: [pickupPrompt], consumedTurn: false};
@@ -2200,6 +2265,7 @@ export function resolveOverworldAction(
         events.push({
             kind: 'player-damaged',
             amount: reduced.damage,
+            position: nextState.overworld.playerPosition,
             message: `Took ${reduced.damage} damage.`
         });
     }

@@ -1,6 +1,7 @@
 import {z} from 'zod';
 
 import {
+    BASE_BACKPACK_CAPACITY,
     CAMPAIGN_SCHEMA_VERSION,
     STARTING_MONEY,
     createInitialCampaignState,
@@ -19,7 +20,7 @@ import {Mulberry32Random} from '../domain/random/random-source';
 import {deriveSeed} from '../domain/random/seed-derivation';
 import {campaignStateSchema, parseCampaignState} from './campaign-state.schema';
 
-export const SAVE_FORMAT_VERSION = 4;
+export const SAVE_FORMAT_VERSION = 5;
 export const SAVE_SLOTS = ['slot-1', 'slot-2', 'slot-3'] as const;
 export type SaveSlot = (typeof SAVE_SLOTS)[number];
 const LEGACY_OBJECTIVE_IDS = ['pipe', 'lock', 'space', 'platformer'] as const;
@@ -127,6 +128,16 @@ const versionThreeEnvelopeShape = z.object({
     state: z.object({
         schemaVersion: z.literal(3),
         overworld: z.object({seed: uint32}).passthrough()
+    }).passthrough()
+}).passthrough();
+
+const versionFourEnvelopeShape = z.object({
+    formatVersion: z.literal(4),
+    savedAt: z.iso.datetime(),
+    state: z.object({
+        schemaVersion: z.literal(4),
+        player: z.object({}).passthrough(),
+        overworld: z.object({}).passthrough()
     }).passthrough()
 }).passthrough();
 
@@ -292,11 +303,13 @@ function migrateVersionTwoEnvelope(input: unknown): SaveEnvelope {
             schemaVersion: CAMPAIGN_SCHEMA_VERSION,
             player: {
                 ...legacy.data.state.player,
-                money: STARTING_MONEY
+                money: STARTING_MONEY,
+                backpackCapacity: BASE_BACKPACK_CAPACITY
             },
             overworld: {
                 ...legacy.data.state.overworld,
                 serviceSites: [],
+                selectedObjectiveId: null,
                 reinforcementCountdownMs: getReinforcementDelayMs(
                     legacy.data.state.overworld.seed,
                     0
@@ -323,8 +336,13 @@ function migrateVersionThreeEnvelope(input: unknown): SaveEnvelope {
         state: {
             ...legacy.data.state,
             schemaVersion: CAMPAIGN_SCHEMA_VERSION,
+            player: {
+                ...(legacy.data.state.player as Record<string, unknown> | undefined),
+                backpackCapacity: BASE_BACKPACK_CAPACITY
+            },
             overworld: {
                 ...legacy.data.state.overworld,
+                selectedObjectiveId: null,
                 reinforcementCountdownMs: getReinforcementDelayMs(
                     legacy.data.state.overworld.seed,
                     0
@@ -336,6 +354,38 @@ function migrateVersionThreeEnvelope(input: unknown): SaveEnvelope {
     const parsed = saveEnvelopeSchema.safeParse(upgraded);
     if (!parsed.success) {
         throw new SaveDataError('Version 3 save data failed validation.', {cause: parsed.error});
+    }
+    return parsed.data;
+}
+
+/**
+ * Version 5 introduced the purchasable backpack capacity and the tracked
+ * objective. Both default so an in-progress level survives untouched.
+ */
+function migrateVersionFourEnvelope(input: unknown): SaveEnvelope {
+    const legacy = versionFourEnvelopeShape.safeParse(input);
+    if (!legacy.success) {
+        throw new SaveDataError('Version 4 save data failed validation.', {cause: legacy.error});
+    }
+    const upgraded = {
+        ...legacy.data,
+        formatVersion: SAVE_FORMAT_VERSION,
+        state: {
+            ...legacy.data.state,
+            schemaVersion: CAMPAIGN_SCHEMA_VERSION,
+            player: {
+                ...legacy.data.state.player,
+                backpackCapacity: BASE_BACKPACK_CAPACITY
+            },
+            overworld: {
+                ...legacy.data.state.overworld,
+                selectedObjectiveId: null
+            }
+        }
+    };
+    const parsed = saveEnvelopeSchema.safeParse(upgraded);
+    if (!parsed.success) {
+        throw new SaveDataError('Version 4 save data failed validation.', {cause: parsed.error});
     }
     return parsed.data;
 }
@@ -366,6 +416,9 @@ function parseSerializedSave(serialized: string): {
     }
     if (input.formatVersion === 3) {
         return {envelope: migrateVersionThreeEnvelope(input), migrated: true};
+    }
+    if (input.formatVersion === 4) {
+        return {envelope: migrateVersionFourEnvelope(input), migrated: true};
     }
     if (input.formatVersion !== SAVE_FORMAT_VERSION) {
         throw new SaveDataError(`Unsupported save format version: ${String(input.formatVersion)}.`);

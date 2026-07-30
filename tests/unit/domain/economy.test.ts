@@ -6,10 +6,17 @@ import {
     SHOP_CATALOG,
     calculateMonsterMoneyDrop,
     creditMoney,
+    getBackpackExpansionPrice,
+    getItemSaleValue,
+    getLevelPriceMultiplier,
+    getScrapSaleValue,
     getShopOffer,
+    getShopOfferPrice,
     getShopPrice,
     purchaseSpaceObjectiveSkip,
     purchaseShopOffer,
+    sellBackpackItem,
+    sellScrap,
     tryDebitMoney
 } from '../../../src/domain/economy/economy';
 import {createItemInstance} from '../../../src/domain/entities/item-types';
@@ -83,7 +90,11 @@ describe('persistent campaign economy', () => {
             'getaway-car',
             'reinforced-heart',
             'drill-servo',
-            'tool-capacitor'
+            'tool-capacitor',
+            'expedition-pack',
+            'slick-tank',
+            'smoke-launcher',
+            'flame-nozzle'
         ]);
         for (const offer of SHOP_CATALOG) {
             expect(getShopOffer(offer.id)).toBe(offer);
@@ -92,6 +103,108 @@ describe('persistent campaign economy', () => {
         }
         expect(getShopOffer('not-an-offer')).toBeNull();
         expect(getShopPrice('not-an-offer')).toBeNull();
+    });
+
+    it('raises shop prices with the level while pinning the $100 car', () => {
+        const level1 = campaign();
+        const level5 = {
+            ...level1,
+            overworld: {...level1.overworld, levelId: 'level-5'}
+        };
+
+        expect(getLevelPriceMultiplier(1)).toBe(1);
+        expect(getLevelPriceMultiplier(5)).toBeCloseTo(2.2);
+        expect(getShopOfferPrice(level1, 'field-medicine')).toBe(10);
+        expect(getShopOfferPrice(level5, 'field-medicine')).toBe(22);
+        expect(getShopOfferPrice(level5, 'getaway-car')).toBe(100);
+        expect(getShopOfferPrice(level5, 'not-an-offer')).toBeNull();
+        expect(() => getLevelPriceMultiplier(0)).toThrow(/positive safe integer/);
+    });
+
+    it('sells salvage for money and refuses to sell what the player lacks', () => {
+        const base = campaign();
+        const withScrap = {...base, player: {...base.player, scrap: 6}};
+
+        expect(getScrapSaleValue(6)).toBe(12);
+        const sold = sellScrap(withScrap, 6);
+        expect(sold.ok).toBe(true);
+        if (!sold.ok) return;
+        expect(sold.paid).toBe(12);
+        expect(sold.state.player.scrap).toBe(0);
+        expect(sold.state.player.money).toBe(STARTING_MONEY + 12);
+
+        expect(sellScrap(withScrap, 7)).toEqual({
+            ok: false,
+            state: withScrap,
+            reason: 'no-scrap'
+        });
+        expect(() => sellScrap(withScrap, 0)).toThrow(/positive safe integer/);
+    });
+
+    it('buys back carried items but protects a quick-slotted stack', () => {
+        const base = campaign();
+        const bow = createItemInstance('test/bow', 'bow', {
+            quality: 'rare',
+            affixIds: ['keen']
+        });
+        const stocked = {
+            ...base,
+            player: {
+                ...base.player,
+                backpack: [...base.player.backpack, bow]
+            }
+        };
+
+        expect(getItemSaleValue(bow)).toBe(getItemSaleValue(bow));
+        const sold = sellBackpackItem(stocked, bow.id);
+        expect(sold.ok).toBe(true);
+        if (!sold.ok) return;
+        expect(sold.paid).toBeGreaterThan(0);
+        expect(sold.state.player.money).toBe(STARTING_MONEY + sold.paid);
+        expect(sold.state.player.backpack.some(item => item.id === bow.id)).toBe(false);
+
+        expect(sellBackpackItem(stocked, 'missing')).toMatchObject({
+            ok: false,
+            reason: 'unknown-item'
+        });
+        expect(sellBackpackItem(stocked, base.player.backpack[0]!.id)).toMatchObject({
+            ok: false,
+            reason: 'quick-slot-item'
+        });
+    });
+
+    it('doubles the Expedition Pack price for every pack already carried', () => {
+        const base = campaign();
+        let state = {...base, player: {...base.player, money: 1_000}};
+
+        expect(getBackpackExpansionPrice(state.player)).toBe(60);
+        const first = purchaseShopOffer(state, 'expedition-pack');
+        expect(first.ok).toBe(true);
+        if (!first.ok) return;
+        state = first.state;
+        expect(state.player.backpackCapacity).toBe(10);
+        expect(state.player.money).toBe(940);
+        expect(getBackpackExpansionPrice(state.player)).toBe(120);
+
+        const second = purchaseShopOffer(state, 'expedition-pack');
+        expect(second.ok).toBe(true);
+        if (!second.ok) return;
+        expect(second.state.player.backpackCapacity).toBe(12);
+        expect(second.state.player.money).toBe(820);
+    });
+
+    it('installs car modules that persist for future Casino Heist runs', () => {
+        const base = campaign();
+        const rich = {...base, player: {...base.player, money: 500}};
+        const first = purchaseShopOffer(rich, 'slick-tank');
+
+        expect(first.ok).toBe(true);
+        if (!first.ok) return;
+        expect(first.state.player.installedModuleIds).toContain('shop/car/oil-slick');
+        expect(purchaseShopOffer(first.state, 'slick-tank')).toMatchObject({
+            ok: false,
+            reason: 'already-owned'
+        });
     });
 
     it('credits and debits money without allowing a negative balance', () => {

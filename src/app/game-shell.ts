@@ -1,9 +1,15 @@
+import type {QuickSlotView} from './control-deck';
 import type {CampaignState, EncounterKind} from '../domain/campaign/campaign-state';
-import {ITEM_DEFINITIONS} from '../domain/entities/item-types';
+import {getItemGlyph, ITEM_DEFINITIONS} from '../domain/entities/item-types';
+import {describeWeaponStats, getWeaponStats} from '../domain/entities/weapon-stats';
 import {getCampaignLevelNumber, getLevelExitStatus} from '../domain/campaign/level-progression';
-import {getCurrentObjective, getObjectiveStatus} from '../domain/overworld/level-objectives';
+import {
+    getObjectiveStatus,
+    getSelectableObjectives,
+    getTrackedObjective
+} from '../domain/overworld/level-objectives';
 import {DIRECTION_VECTORS, type DirectionId} from '../domain/overworld/move-player';
-import {getPassageDistances} from '../domain/overworld/objective-placement';
+import {getPassageDistances} from '../domain/overworld/maze-distances';
 import type {OverworldEvent} from '../domain/overworld/resolve-overworld-action';
 
 export type GameActivityKind = EncounterKind | 'blackjack' | 'holdem';
@@ -33,7 +39,9 @@ export interface GameShell {
     readonly money: HTMLElement;
     readonly reinforcement: HTMLElement;
     readonly objective: HTMLElement;
+    readonly objectiveCycle: HTMLButtonElement;
     readonly playerStatus: HTMLElement;
+    readonly mazeHelp: HTMLButtonElement;
     readonly exitStatus: HTMLElement;
     readonly message: HTMLElement;
     readonly controlDeck: HTMLElement;
@@ -59,7 +67,9 @@ export function getGameShell(): GameShell {
         money: requireElement<HTMLElement>('#money'),
         reinforcement: requireElement<HTMLElement>('#reinforcement'),
         objective: requireElement<HTMLElement>('#objective'),
+        objectiveCycle: requireElement<HTMLButtonElement>('#objective-cycle'),
         playerStatus: requireElement<HTMLElement>('#player-status'),
+        mazeHelp: requireElement<HTMLButtonElement>('#maze-help'),
         exitStatus: requireElement<HTMLElement>('#exit-status'),
         message: requireElement<HTMLElement>('#message'),
         controlDeck: requireElement<HTMLElement>('#control-deck')
@@ -89,25 +99,23 @@ export function updatePhaserHud(
 ): void {
     shell.level.textContent = String(getCampaignLevelNumber(state));
     shell.health.textContent = `${state.player.health} / ${state.player.maxHealth}`;
-    shell.mining.textContent = `${state.player.miningPower} (${state.player.toolCharge})`;
-    const weapon = state.player.equippedWeapon;
-    const weaponDefinition = weapon ? ITEM_DEFINITIONS[weapon.baseTypeId] : null;
-    const weaponDamage = (
-        weaponDefinition && 'baseDamage' in weaponDefinition
-            ? (weaponDefinition.baseDamage ?? 1)
-            : 1
-    ) +
-        (weapon?.affixIds.includes('keen') ? 1 : 0);
-    shell.weapon.textContent = weapon
-        ? `${weaponDefinition?.label ?? weapon.baseTypeId} ${weaponDamage}`
-        : 'Improvised 1';
-    shell.backpack.textContent = `${state.player.backpack.length} / 8`;
+    // Mining needs both numbers spelled out: power decides which walls can be
+    // cut, charges decide how many more cuts remain.
+    shell.mining.textContent = state.player.miningPower === 0
+        ? 'No pick'
+        : `power ${state.player.miningPower} · ${state.player.toolCharge} left`;
+    shell.weapon.textContent = describeWeaponStats(
+        getWeaponStats(state.player),
+        {ammo: state.player.bowAmmo}
+    );
+    shell.backpack.textContent =
+        `${state.player.backpack.length} / ${state.player.backpackCapacity}`;
     shell.money.textContent = `$${state.player.money}`;
     shell.reinforcement.textContent = state.overworld.reinforcementCountdownMs <= 0
         ? 'Ready'
         : `${Math.ceil(state.overworld.reinforcementCountdownMs / 1_000)}s`;
     const exit = getLevelExitStatus(state);
-    const currentObjective = exit.ready ? null : getCurrentObjective(state);
+    const currentObjective = exit.ready ? null : getTrackedObjective(state);
     const lockedRequiredHeist = !exit.ready && currentObjective === null
         ? state.overworld.objectives.find(objective =>
             objective.objectiveId === 'casino-heist' &&
@@ -161,6 +169,10 @@ export function updatePhaserHud(
     } else {
         shell.objective.textContent = objectiveLabel;
     }
+    // Retargeting only makes sense when more than one objective is still open.
+    const selectableCount = exit.ready ? 0 : getSelectableObjectives(state).length;
+    shell.objectiveCycle.disabled = selectableCount < 2;
+    shell.objectiveCycle.dataset.selectable = String(selectableCount);
     shell.playerStatus.textContent = state.player.statuses.length > 0
         ? state.player.statuses.map(status =>
             `${status.kind} ${status.remainingTurns}`
@@ -199,11 +211,33 @@ export function updatePhaserHud(
     shell.gameMain.dataset.campaignFlags = state.flags.join(',');
 }
 
+/**
+ * The three quick slots as the shared control deck renders them. An empty slot
+ * still occupies its position so the row never reflows while playing.
+ */
+export function getQuickSlotViews(
+    state: CampaignState
+): readonly (QuickSlotView | null)[] {
+    return state.player.quickSlotItemIds.map(itemId => {
+        if (itemId === null) return null;
+        const item = state.player.backpack.find(candidate => candidate.id === itemId);
+        if (!item) return null;
+        const definition = ITEM_DEFINITIONS[item.baseTypeId];
+        const detail = item.quantity > 1
+            ? `×${item.quantity}`
+            : item.charges !== null ? `(${item.charges})` : undefined;
+        return {
+            icon: getItemGlyph(item.baseTypeId),
+            label: definition.label,
+            ...(detail ? {detail} : {})
+        };
+    });
+}
+
 export function updatePhaserEncounter(shell: GameShell, kind: GameActivityKind | null): void {
     const canvas = shell.gameMain.querySelector<HTMLCanvasElement>('canvas');
-    // Minigames carry their own in-canvas controls, so the maze deck steps
-    // aside instead of sending stray overworld actions.
-    shell.controlDeck.classList.toggle('hidden', kind !== null);
+    // Every scene now declares its own scheme for the shared deck, so the deck
+    // stays on screen and simply changes what its buttons mean.
     if (kind) {
         shell.gameMain.dataset.encounter = kind;
         const label: Record<GameActivityKind, string> = {

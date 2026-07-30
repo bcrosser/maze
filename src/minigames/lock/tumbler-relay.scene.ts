@@ -1,5 +1,7 @@
 import Phaser from 'phaser';
 
+import {getControlDeck} from '../../app/control-deck-host';
+import {TUMBLER_RELAY_CONTROL_SCHEME, type ControlEvent} from '../../app/control-scheme';
 import {Mulberry32Random} from '../../domain/random/random-source';
 import type {EncounterContext, EncounterResult, OutcomeEffect} from '../../encounters/contracts';
 import {
@@ -323,10 +325,23 @@ export class TumblerRelayScene extends Phaser.Scene {
         }).setOrigin(0.5);
     }
 
+    private readonly handleControlEvent = (event: ControlEvent): void => {
+        if (event.kind !== 'button' || event.phase !== 'press') return;
+        if (this.helpOpen) {
+            this.hideHelp(true);
+            return;
+        }
+        if (!this.canInteract()) return;
+        if (event.id === 'latch') this.tryCatch();
+        if (event.id === 'turn') this.tryTurnCam();
+    };
+
     private bindInput(): void {
         this.input.keyboard?.on('keydown', this.handleKeyDown, this);
+        getControlDeck(this)?.setScheme(TUMBLER_RELAY_CONTROL_SCHEME, this.handleControlEvent);
         this.events.once('shutdown', () => {
             this.input.keyboard?.off('keydown', this.handleKeyDown, this);
+            getControlDeck(this)?.clearScheme(TUMBLER_RELAY_CONTROL_SCHEME.id);
             delete this.game.canvas.dataset.tumblerFeedback;
             delete this.game.canvas.dataset.tumblerStatus;
             delete this.game.canvas.dataset.tumblerActive;

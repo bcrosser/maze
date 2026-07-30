@@ -1,5 +1,7 @@
 import Phaser from 'phaser';
 
+import {getControlDeck} from '../../app/control-deck-host';
+import {BLACKJACK_CONTROL_SCHEME, type ControlEvent} from '../../app/control-scheme';
 import {Mulberry32Random} from '../../domain/random/random-source';
 import {
     createBlackjackTable,
@@ -71,8 +73,10 @@ export class BlackjackScene extends Phaser.Scene {
         this.wager = clampEvenWager(Math.min(10, data.bankroll), data.bankroll);
         this.notifiedHand = 0;
         this.input.keyboard?.on('keydown', this.handleKeyDown, this);
+        getControlDeck(this)?.setScheme(BLACKJACK_CONTROL_SCHEME, this.handleControlEvent);
         this.events.once('shutdown', () => {
             this.input.keyboard?.off('keydown', this.handleKeyDown, this);
+            getControlDeck(this)?.clearScheme(BLACKJACK_CONTROL_SCHEME.id);
             delete this.game.canvas.dataset.casinoGame;
             delete this.game.canvas.dataset.casinoPhase;
             delete this.game.canvas.dataset.casinoBankroll;
@@ -101,6 +105,29 @@ export class BlackjackScene extends Phaser.Scene {
         }
         if (event.key === 'ArrowLeft') this.adjustWager(-2);
         if (event.key === 'ArrowRight') this.adjustWager(2);
+    };
+
+    private readonly handleControlEvent = (event: ControlEvent): void => {
+        if (event.kind === 'direction') {
+            if (event.phase !== 'press') return;
+            this.adjustWager(event.direction === 'left' ? -2 : 2);
+            return;
+        }
+        if (event.kind !== 'button' || event.phase !== 'press') return;
+        switch (event.id) {
+            case 'deal':
+                this.deal();
+                break;
+            case 'hit':
+                this.hit();
+                break;
+            case 'stand':
+                this.stand();
+                break;
+            case 'double':
+                this.doubleDown();
+                break;
+        }
     };
 
     private deal(): void {

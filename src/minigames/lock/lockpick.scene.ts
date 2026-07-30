@@ -1,5 +1,7 @@
 import Phaser from 'phaser';
 
+import {getControlDeck} from '../../app/control-deck-host';
+import {LOCKPICK_CONTROL_SCHEME, type ControlEvent} from '../../app/control-scheme';
 import {Mulberry32Random} from '../../domain/random/random-source';
 import type {EncounterContext, EncounterResult, OutcomeEffect} from '../../encounters/contracts';
 import {
@@ -374,10 +376,12 @@ export class LockpickScene extends Phaser.Scene {
         this.input.keyboard?.on('keydown', this.handleKeyDown, this);
         this.input.on('pointermove', this.handlePointerMove, this);
         this.input.on('pointerup', this.handlePointerUp, this);
+        getControlDeck(this)?.setScheme(LOCKPICK_CONTROL_SCHEME, this.handleControlEvent);
         this.events.once('shutdown', () => {
             this.input.keyboard?.off('keydown', this.handleKeyDown, this);
             this.input.off('pointermove', this.handlePointerMove, this);
             this.input.off('pointerup', this.handlePointerUp, this);
+            getControlDeck(this)?.clearScheme(LOCKPICK_CONTROL_SCHEME.id);
             delete this.game.canvas.dataset.lockFeedback;
             delete this.game.canvas.dataset.lockStatus;
             delete this.game.canvas.dataset.lockSelectedPin;
@@ -426,6 +430,52 @@ export class LockpickScene extends Phaser.Scene {
             return;
         }
         event.preventDefault();
+    };
+
+    /**
+     * The pins and the tension bar stay draggable in the canvas because they
+     * are direct manipulation; the deck mirrors the keyboard bindings so touch
+     * players get the same precision.
+     */
+    private readonly handleControlEvent = (event: ControlEvent): void => {
+        if (this.helpOpen) {
+            if (event.kind === 'button' && event.phase === 'press') this.hideHelp(true);
+            return;
+        }
+        if (!this.canInteract()) return;
+        if (event.kind === 'direction') {
+            if (event.phase !== 'press') return;
+            switch (event.direction) {
+                case 'left':
+                    this.selectPin(this.lock.selectedPinIndex - 1);
+                    break;
+                case 'right':
+                    this.selectPin(this.lock.selectedPinIndex + 1);
+                    break;
+                case 'up':
+                    this.moveSelectedPick(this.lock.pickHeight + PICK_KEYBOARD_STEP);
+                    break;
+                case 'down':
+                    this.moveSelectedPick(this.lock.pickHeight - PICK_KEYBOARD_STEP);
+                    break;
+            }
+            return;
+        }
+        if (event.kind !== 'button' || event.phase !== 'press') return;
+        switch (event.id) {
+            case 'set':
+                this.releaseSelectedPin();
+                break;
+            case 'ease':
+                this.changeTension(this.lock.tension - TENSION_KEYBOARD_STEP);
+                break;
+            case 'grip':
+                this.changeTension(this.lock.tension + TENSION_KEYBOARD_STEP);
+                break;
+            case 'turn':
+                this.tryTurnCylinder();
+                break;
+        }
     };
 
     private readonly handlePointerMove = (pointer: Phaser.Input.Pointer): void => {

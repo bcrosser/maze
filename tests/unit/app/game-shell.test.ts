@@ -44,7 +44,9 @@ function shellStub(): GameShell {
         money: elementStub<HTMLElement>(),
         reinforcement: elementStub<HTMLElement>(),
         objective: elementStub<HTMLElement>(),
+        objectiveCycle: elementStub<HTMLButtonElement>(),
         playerStatus: elementStub<HTMLElement>(),
+        mazeHelp: elementStub<HTMLButtonElement>(),
         exitStatus: elementStub<HTMLElement>(),
         message: elementStub<HTMLElement>(),
         controlDeck: elementStub<HTMLElement>()

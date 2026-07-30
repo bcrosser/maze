@@ -14,8 +14,12 @@ export const ZAPPER_ALIEN_SPAWN_X = 674;
 export const ZAPPER_DANGER_X = 94;
 export const ZAPPER_OUTGOING_MISS_X = 714;
 export const ZAPPER_RETURN_MISS_X = 8;
-export const ZAPPER_OUTGOING_SPEED = 360;
-export const ZAPPER_RETURN_SPEED = 320;
+/**
+ * Blasters slide briskly so one worker can keep several lanes moving at once.
+ * These speeds are what make the tighter order cadence below survivable.
+ */
+export const ZAPPER_OUTGOING_SPEED = 540;
+export const ZAPPER_RETURN_SPEED = 480;
 export const ZAPPER_DEFAULT_QUOTA = 12;
 export const ZAPPER_DEFAULT_STARTING_LIVES = 3;
 export const ZAPPER_BASE_FILL_DURATION_MS = 920;
@@ -25,8 +29,8 @@ export const ZAPPER_LANE_RELIEF_MS = 2_500;
 /** Approach speed multiplier applied inside a lane's recovery window. */
 export const ZAPPER_LANE_RELIEF_SPEED_MULTIPLIER = 0.55;
 
-const MIN_GLOBAL_SPAWN_GAP_MS = 2_100;
-const MIN_SAME_LANE_SPAWN_GAP_MS = 3_400;
+const MIN_GLOBAL_SPAWN_GAP_MS = 1_600;
+const MIN_SAME_LANE_SPAWN_GAP_MS = 2_900;
 const MIN_APPROACH_BUDGET_MS = 12_000;
 const MAX_DIFFICULTY = 5;
 
@@ -478,10 +482,17 @@ export function createZapperCourse(
         for (const laneIndex of lanes) {
             if (orders.length >= orderCount) break;
             if (orders.length > 0) {
-                const baseGap = 2_500 - difficulty * 70;
-                spawnAtMs += baseGap + randomInteger(random, 701);
+                // Customers arrive close enough together that lanes overlap and
+                // the shift has to be juggled, not queued through one at a time.
+                // The floor keeps the schedule inside the constructive route the
+                // validator proves, so a hard shift is still a winnable one.
+                const baseGap = Math.max(
+                    MIN_GLOBAL_SPAWN_GAP_MS + ZAPPER_FIXED_STEP_MS * 2,
+                    2_050 - difficulty * 110
+                );
+                spawnAtMs += baseGap + randomInteger(random, 601);
                 if (orders.length % ZAPPER_LANE_COUNT === 0) {
-                    spawnAtMs += 1_200 + randomInteger(random, 701);
+                    spawnAtMs += 900 + randomInteger(random, 601);
                 }
                 spawnAtMs = alignToFixedStep(spawnAtMs);
             }

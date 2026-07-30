@@ -96,6 +96,7 @@ export function advanceCampaignLevel(state: CampaignState): CampaignState {
             traps: [],
             pendingHazards: [],
             objectives: [],
+            selectedObjectiveId: null,
             serviceSites: [],
             pipeShortcutWall: null,
             sanctuaryPosition: {x: 1, y: 1},

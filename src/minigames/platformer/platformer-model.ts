@@ -125,6 +125,11 @@ export interface PlatformerInput {
     readonly jumpPressed: boolean;
     readonly jumpHeld: boolean;
     readonly firePressed?: boolean;
+    /**
+     * Holding down drops through the platform underfoot. Without it a collectible
+     * placed under an overhang can be impossible to reach again.
+     */
+    readonly dropPressed?: boolean;
 }
 
 export interface PlatformerSurfaceState {
@@ -174,6 +179,7 @@ export interface PlatformerProjectile {
 
 export type PlatformerEvent =
     | {readonly kind: 'jump'}
+    | {readonly kind: 'dropped-through'}
     | {readonly kind: 'shot-fired'}
     | {readonly kind: 'empty-weapon'}
     | {readonly kind: 'core-collected'; readonly remaining: number}
@@ -199,6 +205,9 @@ export interface PlatformerState {
     readonly facing: -1 | 1;
     readonly grounded: boolean;
     readonly groundedPlatformId: string | null;
+    /** Remaining window in which the dropped-through platform stays passable. */
+    readonly dropThroughMs: number;
+    readonly dropThroughPlatformId: string | null;
     readonly coyoteMs: number;
     readonly jumpBufferMs: number;
     readonly jumpCutEligible: boolean;
@@ -264,6 +273,13 @@ const PLAYER_PROJECTILE_LIFETIME_MS = 1_800;
 const ENEMY_PROJECTILE_SPEED = 140;
 const WORLD_HEIGHT = 672;
 const BASE_GROUND_Y = 570;
+/** How long a dropped-through platform stays passable underfoot. */
+const DROP_THROUGH_WINDOW_MS = 190;
+/**
+ * Vertical spacing of the optional upper platform tiers. A jump clears
+ * `430^2 / (2 * 1000)` ≈ 92px, so 74 leaves comfortable headroom.
+ */
+const UPPER_TIER_STEP_PX = 74;
 const GENERATION_ATTEMPTS = 8;
 
 const SECTION_TEMPLATES = Object.freeze([
@@ -499,6 +515,29 @@ function generateCandidate(
                 18,
                 'normal'
             ));
+        }
+        // Optional upper tiers. Each step is inside a single jump of the one
+        // below, so the climb is real platforming without touching the
+        // certified ground route. Hold Down to come back through them.
+        if (index > 0 && index < templateIds.length - 1) {
+            const tiers = 2 + randomInteger(random, levelTier >= 2 ? 2 : 1);
+            for (let tier = 0; tier < tiers; tier++) {
+                // A zig-zagging staircase: each tread is one jump above and one
+                // jump across from the last, so the climb is always possible.
+                const side = tier % 2 === 0 ? 0.18 : 0.55;
+                const tierSurface: PlatformerSurfaceKind = tier === tiers - 1 &&
+                    surfaceSet.includes('bounce')
+                    ? 'bounce'
+                    : 'normal';
+                platforms.push(createPlatform(
+                    `ledge-high-${index}-${tier}`,
+                    cursorX + Math.floor(platformWidth * side),
+                    groundY - UPPER_TIER_STEP_PX * (tier + 1),
+                    96 + randomInteger(random, 40),
+                    16,
+                    tierSurface
+                ));
+            }
         }
         if (templateId === 'hazard-run' && index > 1) {
             hazards.push(createHazard(
@@ -976,6 +1015,8 @@ export function createPlatformerState(level: PlatformerLevel): PlatformerState {
         facing: 1,
         grounded: false,
         groundedPlatformId: null,
+        dropThroughMs: 0,
+        dropThroughPlatformId: null,
         coyoteMs: 0,
         jumpBufferMs: 0,
         jumpCutEligible: false,
@@ -1052,6 +1093,14 @@ export function runtimePlatformRect(
 function isPlatformSolid(state: PlatformerState, platform: PlatformRect): boolean {
     return platform.surfaceKind !== 'crumbling' ||
         surfaceState(state, platform.id).crumbleDisabledMs <= 0;
+}
+
+/**
+ * Raised platforms can be dropped through; the ground itself cannot, because
+ * below it is nothing at all.
+ */
+function isDroppableSurface(platform: PlatformRect): boolean {
+    return !platform.id.startsWith('ground-');
 }
 
 function updateSurfaces(
@@ -1143,6 +1192,8 @@ function respawn(
         velocityY: 0,
         grounded: false,
         groundedPlatformId: null,
+        dropThroughMs: 0,
+        dropThroughPlatformId: null,
         coyoteMs: 0,
         jumpBufferMs: 0,
         jumpCutEligible: false,
@@ -1454,8 +1505,23 @@ function stepFixed(
     let grounded = false;
     let groundedPlatformId: string | null = null;
     const supportingSurface = currentSurface(working, level);
+    let dropThroughMs = Math.max(0, working.dropThroughMs - stepMs);
+    let dropThroughPlatformId = dropThroughMs > 0 ? working.dropThroughPlatformId : null;
 
-    if (working.jumpBufferMs > 0 && coyoteMs > 0) {
+    // Dropping down takes priority over jumping, so a held jump cannot fight it.
+    if (
+        input.dropPressed === true &&
+        working.grounded &&
+        supportingSurface !== null &&
+        isDroppableSurface(supportingSurface)
+    ) {
+        dropThroughMs = DROP_THROUGH_WINDOW_MS;
+        dropThroughPlatformId = supportingSurface.id;
+        working = {...working, grounded: false, groundedPlatformId: null, jumpBufferMs: 0};
+        coyoteMs = 0;
+        velocityY = Math.max(velocityY, 40);
+        events.push({kind: 'dropped-through'});
+    } else if (working.jumpBufferMs > 0 && coyoteMs > 0) {
         velocityY = PLAYER_JUMP_IMPULSE;
         working = {...working, jumpBufferMs: 0};
         coyoteMs = 0;
@@ -1507,6 +1573,7 @@ function stepFixed(
     if (velocityY >= 0) {
         for (const platform of level.platforms) {
             if (!isPlatformSolid(working, platform)) continue;
+            if (dropThroughMs > 0 && platform.id === dropThroughPlatformId) continue;
             const rect = runtimePlatformRect(working, platform);
             const horizontalOverlap = x < rect.x + rect.width &&
                 x + PLATFORMER_PLAYER_SIZE.width > rect.x;
@@ -1536,6 +1603,8 @@ function stepFixed(
         facing,
         grounded,
         groundedPlatformId,
+        dropThroughMs,
+        dropThroughPlatformId,
         coyoteMs
     };
 

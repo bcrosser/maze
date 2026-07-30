@@ -1,5 +1,8 @@
 import Phaser from 'phaser';
 
+import {getControlDeck} from '../../app/control-deck-host';
+import {SHOOTER_CONTROL_SCHEME, type ControlEvent} from '../../app/control-scheme';
+import type {DirectionId} from '../../domain/overworld/move-player';
 import {Mulberry32Random} from '../../domain/random/random-source';
 import type {EncounterContext, EncounterResult} from '../../encounters/contracts';
 import {
@@ -177,8 +180,6 @@ export class ShooterScene extends Phaser.Scene {
     private promptText!: Phaser.GameObjects.Text;
     private chargeFill!: Phaser.GameObjects.Rectangle;
     private cooldownFill!: Phaser.GameObjects.Rectangle;
-    private bombText!: Phaser.GameObjects.Text;
-    private fireText!: Phaser.GameObjects.Text;
     private modelErrorText: Phaser.GameObjects.Text | null = null;
 
     private readonly enemyShapes = new Map<string, Phaser.GameObjects.Sprite>();
@@ -203,6 +204,12 @@ export class ShooterScene extends Phaser.Scene {
     private lastChoiceId: string | null = null;
 
     private readonly heldMovementKeys = new Set<string>();
+    private deckMovement: Readonly<Record<DirectionId, boolean>> = {
+        up: false,
+        down: false,
+        left: false,
+        right: false
+    };
     private keyboardFireDown = false;
     private touchFireDown = false;
     private firePointerId: number | null = null;
@@ -389,6 +396,7 @@ export class ShooterScene extends Phaser.Scene {
         this.input.on('pointerup', this.handlePointerUp, this);
         this.input.keyboard?.on('keydown', this.handleKeyDown, this);
         this.input.keyboard?.on('keyup', this.handleKeyUp, this);
+        getControlDeck(this)?.setScheme(SHOOTER_CONTROL_SCHEME, this.handleControlEvent);
         this.events.once('shutdown', this.handleShutdown, this);
         this.syncProjection();
     }
@@ -523,53 +531,43 @@ export class ShooterScene extends Phaser.Scene {
         ).setStrokeStyle(2, COLOR.shield, 0.9);
     }
 
+    /**
+     * Drag-to-fly stays in the canvas because it is direct manipulation of the
+     * ship. Fire and Bomb move to the shared control deck.
+     */
     private createControls(): void {
         this.joystickBase = this.add.circle(86, 578, 49, 0x26364d, 0.55)
             .setStrokeStyle(2, 0x7990ab, 0.75);
         this.joystickKnob = this.add.circle(86, 578, 20, COLOR.cyan, 0.55);
-
-        const bombButton = this.add.circle(502, 592, 34, 0x70415b, 0.94)
-            .setStrokeStyle(3, COLOR.purple)
-            .setInteractive({useHandCursor: true});
-        this.add.sprite(502, 580, SHOOTER_ATLAS_KEY, 'bomb-icon')
-            .setDisplaySize(34, 34);
-        this.bombText = this.add.text(502, 613, 'x2', {
-            color: '#ffffff',
-            fontFamily: 'monospace',
-            fontSize: '12px',
-            fontStyle: 'bold'
-        }).setOrigin(0.5);
-        bombButton.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
-            if (this.state.moduleChoice === null && this.helpOverlay === null) {
-                this.pendingBomb = true;
-            }
-            pointer.event.preventDefault();
-        });
-
-        const fireButton = this.add.circle(602, 568, 46, 0x763b45, 0.96)
-            .setStrokeStyle(3, COLOR.gold)
-            .setInteractive({useHandCursor: true});
-        this.fireText = this.add.text(602, 568, 'FIRE', {
-            color: '#ffffff',
-            fontFamily: 'monospace',
-            fontSize: '15px',
-            fontStyle: 'bold'
-        }).setOrigin(0.5);
-        fireButton.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
-            if (this.firePointerId === null || this.firePointerId === pointer.id) {
-                this.firePointerId = pointer.id;
-                this.setTouchFire(true);
-            }
-            pointer.event.preventDefault();
-        });
-        fireButton.on('pointerup', (pointer: Phaser.Input.Pointer) => {
-            this.releaseTouchFire(pointer.id);
-            pointer.event.preventDefault();
-        });
-        fireButton.on('pointerout', (pointer: Phaser.Input.Pointer) => {
-            this.releaseTouchFire(pointer.id);
-        });
     }
+
+    private readonly handleControlEvent = (event: ControlEvent): void => {
+        if (this.atlasBlocked || this.finishing) return;
+        if (this.helpOverlay !== null) {
+            if (event.kind === 'button' && event.phase === 'press') this.closeHelp();
+            return;
+        }
+        if (event.kind === 'direction') {
+            const held = event.phase === 'press';
+            this.deckMovement = {
+                ...this.deckMovement,
+                [event.direction]: held
+            };
+            return;
+        }
+        if (event.kind !== 'button') return;
+        if (event.id === 'fire') {
+            this.setTouchFire(event.phase === 'press');
+            return;
+        }
+        if (
+            event.id === 'bomb' &&
+            event.phase === 'press' &&
+            this.state.moduleChoice === null
+        ) {
+            this.pendingBomb = true;
+        }
+    };
 
     private createMeters(): void {
         this.add.rectangle(474, 642, 150, 8, 0x1c2a3a).setOrigin(0, 0.5);
@@ -733,6 +731,7 @@ export class ShooterScene extends Phaser.Scene {
         this.input.off('pointerup', this.handlePointerUp, this);
         this.input.keyboard?.off('keydown', this.handleKeyDown, this);
         this.input.keyboard?.off('keyup', this.handleKeyUp, this);
+        getControlDeck(this)?.clearScheme(SHOOTER_CONTROL_SCHEME.id);
         this.clearDatasets();
         this.resetInputState();
     };
@@ -744,6 +743,10 @@ export class ShooterScene extends Phaser.Scene {
         if (this.heldMovementKeys.has('arrowright') || this.heldMovementKeys.has('d')) moveX++;
         if (this.heldMovementKeys.has('arrowup') || this.heldMovementKeys.has('w')) moveY--;
         if (this.heldMovementKeys.has('arrowdown') || this.heldMovementKeys.has('s')) moveY++;
+        if (this.deckMovement.left) moveX--;
+        if (this.deckMovement.right) moveX++;
+        if (this.deckMovement.up) moveY--;
+        if (this.deckMovement.down) moveY++;
         return {moveX, moveY};
     }
 
@@ -762,6 +765,7 @@ export class ShooterScene extends Phaser.Scene {
 
     private resetInputState(): void {
         this.heldMovementKeys.clear();
+        this.deckMovement = {up: false, down: false, left: false, right: false};
         this.keyboardFireDown = false;
         this.touchFireDown = false;
         this.firePointerId = null;
@@ -1261,8 +1265,14 @@ export class ShooterScene extends Phaser.Scene {
             `BOMBS ${this.state.player.bombs}  SCORE ${calculateShooterScore(this.state)}\n` +
             module.toUpperCase()
         );
-        this.bombText.setText(`x${this.state.player.bombs}`);
-        this.fireText.setText(this.state.player.chargeMs === null ? 'FIRE' : 'CHARGE');
+        const deck = getControlDeck(this);
+        deck?.setButtonState('bomb', {
+            label: `Bomb ×${this.state.player.bombs}`,
+            disabled: this.state.player.bombs <= 0
+        });
+        deck?.setButtonState('fire', {
+            label: this.state.player.chargeMs === null ? 'Fire' : 'Charging'
+        });
         this.chargeFill.displayWidth = 150 * getShooterChargeRatio(this.state);
         const cooldownRatio = Math.min(1, this.state.player.cooldownMs / 540);
         this.cooldownFill.displayWidth = 150 * (1 - cooldownRatio);

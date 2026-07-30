@@ -1,5 +1,11 @@
 import Phaser from 'phaser';
 
+import {getControlDeck} from '../app/control-deck-host';
+import {drawHorse} from '../content/horse-art';
+import {
+    OVERWORLD_CONTROL_SCHEME,
+    type ControlEvent
+} from '../app/control-scheme';
 import {
     createInitialCampaignState,
     type ActiveEncounterRecord,
@@ -14,19 +20,46 @@ import {
     MAX_CAMPAIGN_LEVEL
 } from '../domain/campaign/level-progression';
 import {
+    getItemGlyph,
     ITEM_DEFINITIONS,
+    ITEM_SPRITES,
+    ITEM_TYPE_IDS,
     type ItemChoiceId
 } from '../domain/entities/item-types';
 import {
+    describeWeaponComparison,
+    describeWeaponStats,
+    getItemWeaponStats,
+    getWeaponStats
+} from '../domain/entities/weapon-stats';
+import {
+    getItemSaleValue,
+    getLevelPriceMultiplier,
+    getScrapSaleValue,
+    getShopOfferPrice,
     purchaseShopOffer,
     purchaseSpaceObjectiveSkip,
+    sellBackpackItem,
+    sellScrap,
     SHOP_CATALOG,
     SPACE_OBJECTIVE_SKIP_COST,
     type ShopPurchaseFailureReason,
     type SpaceObjectiveSkipFailureReason
 } from '../domain/economy/economy';
-import {MONSTER_DEFINITIONS} from '../domain/entities/monster-types';
-import {MATERIALS, type MaterialId, type MaterialTag} from '../domain/materials/materials';
+import {
+    MONSTER_DEFINITIONS,
+    MONSTER_TYPE_IDS,
+    type MonsterStrategyId
+} from '../domain/entities/monster-types';
+import {
+    getMaterialHardness,
+    getWallMaterial,
+    MATERIAL_IDS,
+    MATERIALS,
+    type MaterialId,
+    type MaterialTag,
+    type WallMaterialView
+} from '../domain/materials/materials';
 import {getMinigameItemBonus} from '../domain/minigame/minigame-item-bonuses';
 import {initializeLevelContent} from '../domain/overworld/level-content-generator';
 import {
@@ -107,9 +140,12 @@ export type OverworldControl =
     | {readonly kind: 'move'; readonly direction: DirectionId}
     | {readonly kind: 'attack-toggle'}
     | {readonly kind: 'use'}
+    | {readonly kind: 'quick-slot'; readonly slot: 0 | 1 | 2}
     | {readonly kind: 'interact'}
     | {readonly kind: 'wait'}
-    | {readonly kind: 'inventory'};
+    | {readonly kind: 'inventory'}
+    | {readonly kind: 'menu'}
+    | {readonly kind: 'cycle-objective'};
 
 export interface OverworldSceneOptions {
     readonly seed: number;
@@ -121,6 +157,8 @@ export interface OverworldSceneOptions {
     readonly onEncounterChanged: (
         kind: EncounterKind | 'blackjack' | 'holdem' | null
     ) => void;
+    /** Opens the shell's pause menu from the shared control deck. */
+    readonly onMenuRequested?: () => void;
 }
 
 interface ObjectiveVisual {
@@ -182,11 +220,335 @@ function messageEvent(message: string): OverworldEvent {
     return {kind: 'blocked', message};
 }
 
+/**
+ * Plain-language wall inspection: what it is, whether the player's pick can get
+ * through it right now, and what breaking it pays out.
+ */
+function describeWallForPlayer(
+    material: WallMaterialView,
+    player: CampaignState['player'],
+    position: {readonly x: number; readonly y: number},
+    overworld: CampaignState['overworld']
+): string {
+    const size = overworld.maze.length;
+    const parts = [`${material.definition.name} wall`];
+    if (material.definition.tags.length > 0) {
+        parts.push(material.definition.tags.join(', '));
+    }
+    const perimeter = position.x === 0 ||
+        position.y === 0 ||
+        position.x === size - 1 ||
+        position.y === size - 1;
+    const protectedShortcut = overworld.pipeShortcutWall !== null &&
+        samePosition(position, overworld.pipeShortcutWall);
+    if (perimeter) {
+        parts.push('Outer wall — it can never be mined');
+    } else if (protectedShortcut) {
+        parts.push('Sealed by the coolant route until Pipe is finished');
+    } else if (material.hardness === undefined) {
+        parts.push('No mining tool cuts this material');
+    } else if (player.miningPower < material.hardness) {
+        parts.push(
+            `Hardness ${material.hardness} — needs mining power ` +
+            `${material.hardness}, you have ${player.miningPower}`
+        );
+    } else if (player.toolCharge <= 0) {
+        parts.push(`Hardness ${material.hardness} — your pick is out of charges`);
+    } else {
+        const yielded = material.hardness >= 4 ? 2 : 1;
+        const bonus = material.id === 'gold' ? 1 : 0;
+        parts.push(
+            `Hardness ${material.hardness} — you can mine it for ` +
+            `${yielded + bonus} salvage (${player.toolCharge} charges left)`
+        );
+    }
+    return parts.join(' · ');
+}
+
+/** Plain-language summary of what each monster strategy does to the player. */
+const MONSTER_BEHAVIOR_HINTS: Readonly<Record<MonsterStrategyId, string>> = Object.freeze({
+    wander: 'drifts until you are close',
+    pursue: 'hunts you across the level',
+    bat: 'moves every turn in an erratic line',
+    sentry: 'never moves but strikes at range',
+    mimic: 'waits disguised until you are adjacent',
+    golem: 'slow, armored, and very heavy hitting',
+    ambusher: 'closes the gap in sudden leaps',
+    caster: 'attacks down open corridors from a distance'
+});
+
+interface MazeHelpPage {
+    readonly title: string;
+    readonly body: string;
+}
+
+/**
+ * Builds the legend from the live registries, so a newly added item, monster, or
+ * material documents itself instead of drifting out of date.
+ */
+function buildMazeHelpPages(state: CampaignState): readonly MazeHelpPage[] {
+    const itemsByCategory = new Map<string, string[]>();
+    for (const typeId of ITEM_TYPE_IDS) {
+        const definition = ITEM_DEFINITIONS[typeId];
+        const list = itemsByCategory.get(definition.category) ?? [];
+        list.push(`${getItemGlyph(typeId)} ${definition.label}`);
+        itemsByCategory.set(definition.category, list);
+    }
+    const itemLines = [...itemsByCategory.entries()].map(([category, labels]) =>
+        `${category.toUpperCase()}: ${labels.join(', ')}`
+    );
+
+    const monsterLines = MONSTER_TYPE_IDS.map(typeId => {
+        const definition = MONSTER_DEFINITIONS[typeId];
+        return `${definition.label} — ${definition.maxHealth} HP, ` +
+            `${definition.baseDamage} dmg, armor ${definition.armor}, ` +
+            `${MONSTER_BEHAVIOR_HINTS[definition.strategyId]}`;
+    });
+
+    const mineable = MATERIAL_IDS
+        .map(id => ({id, hardness: getMaterialHardness(id)}))
+        .filter(entry => entry.hardness !== undefined)
+        .sort((left, right) => (left.hardness ?? 0) - (right.hardness ?? 0))
+        .map(entry => `${MATERIALS[entry.id].name} ${entry.hardness}`);
+    const solid = MATERIAL_IDS
+        .filter(id => getMaterialHardness(id) === undefined)
+        .map(id => MATERIALS[id].name);
+
+    return [
+        {
+            title: 'MAZE LEGEND',
+            body: [
+                'Tap anything to inspect it: a wall reports its material and',
+                'whether your pick can cut it; monsters report health, armor, and',
+                'intent; items report quality and affixes.',
+                '',
+                'The blue rolling ball is you. Little stairs going down are the',
+                'level exit — reach them once the required objectives are done.',
+                'Diamond markers are objectives, and the ↻ button beside the',
+                'Objective readout retargets the one you are tracking.',
+                '',
+                `Salvage sells at shops for $2 each. Prices rise 30% per level,`,
+                `so level ${getCampaignLevelNumber(state)} charges` +
+                ` ${Math.round(getLevelPriceMultiplier(getCampaignLevelNumber(state)) * 100)}%` +
+                ' of base.',
+                'Shops also buy carried loot and sell Expedition Packs that',
+                'permanently widen your backpack.'
+            ].join('\n')
+        },
+        {
+            title: 'CONTROLS',
+            body: [
+                'Stick or arrows/WASD: move, and bump a monster to attack it.',
+                'ATTACK then a direction: fire a ranged weapon.',
+                'Quick slots 1-3: use the assigned item; assign them in Items.',
+                'INTERACT (E): pick up, disarm, shop, or start an objective.',
+                'WAIT (. or Space): spend a turn in place.',
+                'ITEMS (I): open the turn-frozen backpack.',
+                'Escape or MENU: pause.',
+                '',
+                'Mining is automatic: walk into a mineable wall while carrying',
+                'pick charges. The HUD shows mining power and charges left, and',
+                'each cut plays a short pick animation.',
+                '',
+                'Every minigame uses this same stick and button deck; only the',
+                'button labels change.'
+            ].join('\n')
+        },
+        {
+            title: 'ITEMS',
+            body: itemLines.join('\n\n')
+        },
+        {
+            title: 'MONSTERS',
+            body: [
+                ...monsterLines,
+                '',
+                'Elite monsters glow gold and hit harder; a red tint means the',
+                'monster has already committed to an attack next turn.',
+                'Floating numbers show damage dealt and taken.'
+            ].join('\n')
+        },
+        {
+            title: 'WALLS',
+            body: [
+                'Mining power must meet or beat a wall hardness to cut it:',
+                mineable.join(', '),
+                '',
+                'These never yield to any tool:',
+                solid.join(', '),
+                '',
+                'Wall texture follows the material tags: blocks and cracks for',
+                'minerals, fibres for organics, ripples for wet, embers for hot,',
+                'flakes for cold, and sparkles for magical.',
+                'The outer wall of the maze can never be mined.'
+            ].join('\n')
+        }
+    ];
+}
+
+/** The cell a mining action just opened, if any, for its short animation. */
+function findMinedWall(
+    before: CampaignState,
+    after: CampaignState
+): {readonly x: number; readonly y: number} | null {
+    const previousMaze = before.overworld.maze;
+    const nextMaze = after.overworld.maze;
+    if (previousMaze === nextMaze || previousMaze.length !== nextMaze.length) return null;
+    for (let y = 0; y < nextMaze.length; y++) {
+        const previousRow = previousMaze[y]!;
+        const nextRow = nextMaze[y]!;
+        if (previousRow === nextRow) continue;
+        for (let x = 0; x < nextRow.length; x++) {
+            if (previousRow[x]!.kind === 'wall' && nextRow[x]!.kind === 'passage') {
+                return {x, y};
+            }
+        }
+    }
+    return null;
+}
+
+function shadeColor(color: number, amount: number): number {
+    const clamp = (value: number): number => Math.max(0, Math.min(255, Math.round(value)));
+    const red = clamp(((color >> 16) & 0xff) * (1 + amount));
+    const green = clamp(((color >> 8) & 0xff) * (1 + amount));
+    const blue = clamp((color & 0xff) * (1 + amount));
+    return (red << 16) | (green << 8) | blue;
+}
+
+/**
+ * A deliberately faint ground speckle. The floor has to read as a floor without
+ * competing with the items, monsters, and traps standing on it.
+ */
+function drawFloorTexture(
+    graphics: Phaser.GameObjects.Graphics,
+    originX: number,
+    originY: number
+): void {
+    graphics.fillStyle(0xdfd9c6, 0.5);
+    graphics.fillRect(originX + 6, originY + 7, 2, 2);
+    graphics.fillRect(originX + 20, originY + 18, 2, 2);
+    graphics.fillRect(originX + 13, originY + 26, 1, 1);
+    graphics.lineStyle(1, 0xe6e0cd, 0.45);
+    graphics.strokeRect(originX + 0.5, originY + 0.5, CELL_SIZE - 1, CELL_SIZE - 1);
+}
+
+/**
+ * Paints a tag-driven texture onto one 32x32 wall cell: cracked blocks for
+ * minerals, fibres for organics, ripples for wet, embers for hot, flakes for
+ * cold, and sparkles for magical. Materials with several tags stack patterns, so
+ * a wall's make-up is readable without relying on its colour.
+ */
+function drawMaterialPattern(
+    graphics: Phaser.GameObjects.Graphics,
+    tags: readonly MaterialTag[],
+    base: number,
+    originX: number,
+    originY: number
+): void {
+    const light = shadeColor(base, 0.26);
+    const dark = shadeColor(base, -0.32);
+    const tagSet = new Set(tags);
+
+    if (tagSet.has('mineral') || tagSet.has('earth')) {
+        graphics.fillStyle(dark, 0.55);
+        graphics.fillRect(originX, originY + 10, CELL_SIZE, 2);
+        graphics.fillRect(originX, originY + 22, CELL_SIZE, 2);
+        graphics.fillRect(originX + 14, originY, 2, 10);
+        graphics.fillRect(originX + 6, originY + 12, 2, 10);
+        graphics.fillStyle(light, 0.4);
+        graphics.fillRect(originX + 2, originY + 2, 10, 6);
+        graphics.fillRect(originX + 18, originY + 14, 9, 6);
+    }
+    if (tagSet.has('organic')) {
+        graphics.lineStyle(1, dark, 0.65);
+        for (let offset = 3; offset < CELL_SIZE; offset += 8) {
+            graphics.lineBetween(
+                originX + offset,
+                originY,
+                originX + offset + 3,
+                originY + CELL_SIZE
+            );
+        }
+        graphics.lineStyle(1, light, 0.45);
+        graphics.lineBetween(originX, originY + 9, originX + CELL_SIZE, originY + 13);
+    }
+    if (tagSet.has('sharp')) {
+        graphics.fillStyle(light, 0.8);
+        for (let offset = 4; offset < CELL_SIZE - 6; offset += 11) {
+            graphics.fillTriangle(
+                originX + offset,
+                originY + 26,
+                originX + offset + 4,
+                originY + 14,
+                originX + offset + 8,
+                originY + 26
+            );
+        }
+    }
+    if (tagSet.has('wet')) {
+        graphics.lineStyle(2, light, 0.5);
+        for (let offset = 6; offset < CELL_SIZE; offset += 10) {
+            graphics.beginPath();
+            graphics.moveTo(originX, originY + offset);
+            graphics.lineTo(originX + 10, originY + offset - 3);
+            graphics.lineTo(originX + 21, originY + offset);
+            graphics.lineTo(originX + CELL_SIZE, originY + offset - 3);
+            graphics.strokePath();
+        }
+    }
+    if (tagSet.has('hot')) {
+        graphics.fillStyle(light, 0.85);
+        graphics.fillCircle(originX + 8, originY + 9, 2.5);
+        graphics.fillCircle(originX + 21, originY + 17, 2);
+        graphics.fillStyle(0xffe9a8, 0.55);
+        graphics.fillCircle(originX + 8, originY + 9, 1);
+        graphics.fillCircle(originX + 13, originY + 26, 1.4);
+    }
+    if (tagSet.has('cold')) {
+        graphics.lineStyle(1, 0xffffff, 0.6);
+        graphics.lineBetween(originX + 6, originY + 6, originX + 14, originY + 14);
+        graphics.lineBetween(originX + 14, originY + 6, originX + 6, originY + 14);
+        graphics.lineBetween(originX + 19, originY + 19, originX + 27, originY + 27);
+        graphics.lineBetween(originX + 27, originY + 19, originX + 19, originY + 27);
+    }
+    if (tagSet.has('conductive')) {
+        graphics.lineStyle(1, light, 0.85);
+        graphics.beginPath();
+        graphics.moveTo(originX + 4, originY + 28);
+        graphics.lineTo(originX + 12, originY + 17);
+        graphics.lineTo(originX + 8, originY + 15);
+        graphics.lineTo(originX + 18, originY + 4);
+        graphics.strokePath();
+    }
+    if (tagSet.has('magical')) {
+        graphics.fillStyle(0xffffff, 0.62);
+        graphics.fillRect(originX + 9, originY + 4, 2, 2);
+        graphics.fillRect(originX + 24, originY + 11, 2, 2);
+        graphics.fillRect(originX + 5, originY + 20, 2, 2);
+        graphics.fillRect(originX + 17, originY + 27, 2, 2);
+    }
+    if (tagSet.has('poisonous')) {
+        graphics.fillStyle(light, 0.7);
+        graphics.fillCircle(originX + 10, originY + 12, 3.2);
+        graphics.fillCircle(originX + 22, originY + 22, 2.6);
+        graphics.fillStyle(dark, 0.75);
+        graphics.fillCircle(originX + 10, originY + 12, 1.2);
+    }
+    if (tagSet.has('flammable') && !tagSet.has('organic')) {
+        graphics.fillStyle(dark, 0.5);
+        graphics.fillRect(originX, originY + 6, CELL_SIZE, 1);
+        graphics.fillRect(originX, originY + 18, CELL_SIZE, 1);
+    }
+}
+
 export class OverworldScene extends Phaser.Scene {
     private readonly options: OverworldSceneOptions;
     private campaign!: CampaignState;
     private mazeGraphics!: Phaser.GameObjects.Graphics;
-    private playerMarker!: Phaser.GameObjects.Arc;
+    private playerMarker!: Phaser.GameObjects.Container;
+    private playerBallArt!: Phaser.GameObjects.Graphics;
+    private playerRollAngle = 0;
+    private reducedMotion = false;
     private readonly objectiveVisuals = new Map<ObjectiveId, ObjectiveVisual>();
     private readonly serviceSiteVisuals = new Map<string, ServiceSiteVisual>();
     private readonly itemSprites = new Map<string, Phaser.GameObjects.Sprite>();
@@ -254,6 +616,10 @@ export class OverworldScene extends Phaser.Scene {
         this.reinforcementSaveAccumulatorMs = 0;
         this.victoryHorse = null;
         this.playerCameraConfigured = false;
+        this.playerRollAngle = 0;
+        this.reducedMotion = globalThis.matchMedia?.(
+            '(prefers-reduced-motion: reduce)'
+        ).matches ?? false;
 
         const provided = this.restartCampaign ?? this.options.initialCampaign;
         this.restartCampaign = undefined;
@@ -280,24 +646,29 @@ export class OverworldScene extends Phaser.Scene {
             }));
         }
 
-        this.mazeGraphics = this.add.graphics();
+        this.mazeGraphics = this.add.graphics().setDepth(0);
         this.drawMaze();
+        this.createWallInspector();
         this.drawLandmarks();
         this.createObjectiveVisuals();
         this.createServiceSiteVisuals();
         this.syncWorldVisuals();
-        this.playerMarker = this.add.circle(0, 0, CELL_SIZE / 3, 0x2468d8)
-            .setStrokeStyle(3, 0x102d66)
-            .setDepth(30);
+        this.playerMarker = this.createPlayerBall();
         this.syncPlayerMarker();
 
         this.configurePlayerCamera();
 
         this.input.keyboard?.on('keydown', this.handleKeyDown, this);
         this.scale.on('resize', this.handleScaleResize, this);
+        this.applyControlScheme();
+        // A finished minigame resumes this scene, which is when the deck has to
+        // go back to meaning maze actions.
+        this.events.on(Phaser.Scenes.Events.RESUME, this.applyControlScheme, this);
         this.events.once('shutdown', () => {
             this.input.keyboard?.off('keydown', this.handleKeyDown, this);
             this.scale.off('resize', this.handleScaleResize, this);
+            this.events.off(Phaser.Scenes.Events.RESUME, this.applyControlScheme, this);
+            getControlDeck(this)?.clearScheme(OVERWORLD_CONTROL_SCHEME.id);
             this.destroyModal();
             delete this.game.canvas.dataset.campaignVictory;
             delete this.game.canvas.dataset.victoryFanfare;
@@ -370,6 +741,47 @@ export class OverworldScene extends Phaser.Scene {
             this.options.onStateChanged(this.campaign);
         }
     }
+
+    /** Points the shared on-screen deck at maze actions. */
+    private readonly applyControlScheme = (): void => {
+        const deck = getControlDeck(this);
+        if (!deck) return;
+        deck.setScheme(OVERWORLD_CONTROL_SCHEME, this.handleControlEvent);
+        deck.setButtonState('attack', {pressed: this.attackTargeting});
+    };
+
+    private readonly handleControlEvent = (event: ControlEvent): void => {
+        switch (event.kind) {
+            case 'direction':
+                if (event.phase === 'press') {
+                    this.performControl({kind: 'move', direction: event.direction});
+                }
+                break;
+            case 'quick-slot':
+                this.performControl({kind: 'quick-slot', slot: event.slot});
+                break;
+            case 'button':
+                if (event.phase !== 'press') break;
+                switch (event.id) {
+                    case 'attack':
+                        this.performControl({kind: 'attack-toggle'});
+                        break;
+                    case 'interact':
+                        this.performControl({kind: 'interact'});
+                        break;
+                    case 'wait':
+                        this.performControl({kind: 'wait'});
+                        break;
+                    case 'inventory':
+                        this.performControl({kind: 'inventory'});
+                        break;
+                    case 'menu':
+                        this.performControl({kind: 'menu'});
+                        break;
+                }
+                break;
+        }
+    };
 
     private readonly handleKeyDown = (event: KeyboardEvent): void => {
         if (this.campaign.overworld.pendingDefeatChoice) {
@@ -475,6 +887,9 @@ export class OverworldScene extends Phaser.Scene {
             case 'i':
                 this.showInventory();
                 break;
+            case 'h':
+                this.showMazeHelp();
+                break;
             case '.':
             case ' ':
                 event.preventDefault();
@@ -495,6 +910,7 @@ export class OverworldScene extends Phaser.Scene {
     }
 
     private perform(action: OverworldAction): void {
+        const previous = this.campaign;
         const result = resolveOverworldAction(this.campaign, action, {difficulty: 'standard'});
         if (!result.consumedTurn && result.state === this.campaign) {
             const event = result.events.at(-1);
@@ -506,15 +922,170 @@ export class OverworldScene extends Phaser.Scene {
             return;
         }
         this.campaign = result.state;
+        const minedWall = findMinedWall(previous, result.state);
         this.drawMaze();
         this.syncWorldVisuals();
-        this.syncPlayerMarker();
+        this.syncPlayerMarker(
+            action.kind === 'move' && !samePosition(
+                previous.overworld.playerPosition,
+                result.state.overworld.playerPosition
+            )
+                ? action.direction
+                : undefined
+        );
+        if (minedWall) this.playMiningAnimation(minedWall);
+        if (action.kind === 'ranged') {
+            this.playProjectileAnimation(
+                previous.overworld.playerPosition,
+                action.direction,
+                result.events
+            );
+        }
+        this.playCombatNumbers(result.events);
         this.emitState(result.events.at(-1));
         if (this.campaign.overworld.pendingDefeatChoice) {
             this.showDefeatChoice();
             return;
         }
         this.checkCurrentCell();
+    }
+
+    private cellCenter(position: {readonly x: number; readonly y: number}): {
+        readonly x: number;
+        readonly y: number;
+    } {
+        return {
+            x: position.x * CELL_SIZE + CELL_SIZE / 2,
+            y: position.y * CELL_SIZE + CELL_SIZE / 2
+        };
+    }
+
+    /**
+     * A short pick swing with flying chips, so breaking a wall never looks like
+     * walking through it.
+     */
+    private playMiningAnimation(position: {readonly x: number; readonly y: number}): void {
+        const center = this.cellCenter(position);
+        const pick = this.add.graphics().setDepth(34);
+        pick.lineStyle(3, 0x8d6b45, 1).lineBetween(-9, 9, 6, -6);
+        pick.lineStyle(3, 0xd9d7cf, 1).lineBetween(1, -8, 11, -2);
+        pick.setPosition(center.x + 6, center.y - 6).setAngle(-40);
+        this.tweens.add({
+            targets: pick,
+            angle: 18,
+            duration: 130,
+            yoyo: true,
+            repeat: 1,
+            ease: 'Sine.InOut',
+            onComplete: () => pick.destroy()
+        });
+        for (let index = 0; index < 5; index++) {
+            const chip = this.add.rectangle(
+                center.x,
+                center.y,
+                3,
+                3,
+                0xbdb5a1
+            ).setDepth(33);
+            const angle = (index / 5) * Math.PI * 2;
+            this.tweens.add({
+                targets: chip,
+                x: center.x + Math.cos(angle) * 16,
+                y: center.y + Math.sin(angle) * 16,
+                alpha: 0,
+                duration: 260,
+                ease: 'Quad.Out',
+                onComplete: () => chip.destroy()
+            });
+        }
+    }
+
+    /** Flies an arrow from the player to whatever the shot reached. */
+    private playProjectileAnimation(
+        origin: {readonly x: number; readonly y: number},
+        direction: DirectionId,
+        events: readonly OverworldEvent[]
+    ): void {
+        const hit = events.find(event =>
+            event.kind === 'monster-damaged' || event.kind === 'monster-defeated'
+        );
+        const vector = DIRECTION_VECTORS[direction];
+        const target = hit && 'position' in hit
+            ? hit.position
+            : {
+                x: origin.x + vector.x * this.rangedTravelCells(origin, direction),
+                y: origin.y + vector.y * this.rangedTravelCells(origin, direction)
+            };
+        const from = this.cellCenter(origin);
+        const to = this.cellCenter(target);
+        const arrow = this.add.sprite(from.x, from.y, 'item-sprites', ITEM_SPRITES['arrow-bundle'])
+            .setDepth(35)
+            .setDisplaySize(18, 18)
+            .setRotation(Math.atan2(vector.y, vector.x));
+        this.tweens.add({
+            targets: arrow,
+            x: to.x,
+            y: to.y,
+            duration: Math.max(90, Math.hypot(to.x - from.x, to.y - from.y) * 2.2),
+            ease: 'Linear',
+            onComplete: () => arrow.destroy()
+        });
+    }
+
+    /** How far a fired shot visibly travels when it hits nothing. */
+    private rangedTravelCells(
+        origin: {readonly x: number; readonly y: number},
+        direction: DirectionId
+    ): number {
+        const vector = DIRECTION_VECTORS[direction];
+        const limit = getWeaponStats(this.campaign.player).range;
+        let travelled = 0;
+        for (let step = 1; step <= limit; step++) {
+            const cell = this.campaign.overworld.maze[origin.y + vector.y * step]
+                ?.[origin.x + vector.x * step];
+            if (cell?.kind !== 'passage') break;
+            travelled = step;
+        }
+        return Math.max(1, travelled);
+    }
+
+    /**
+     * Floating damage numbers in both directions, so the danger of a given
+     * monster is legible from one exchange rather than inferred over a run.
+     */
+    private playCombatNumbers(events: readonly OverworldEvent[]): void {
+        for (const event of events) {
+            if (
+                event.kind !== 'monster-damaged' &&
+                event.kind !== 'player-damaged' &&
+                event.kind !== 'monster-defeated'
+            ) {
+                continue;
+            }
+            const dealtToMonster = event.kind !== 'player-damaged';
+            const amount = event.kind === 'monster-defeated'
+                ? `$${event.moneyDropped}`
+                : `-${event.amount}`;
+            const center = this.cellCenter(event.position);
+            const label = this.add.text(center.x, center.y - 6, amount, {
+                color: event.kind === 'monster-defeated'
+                    ? '#efc75e'
+                    : dealtToMonster ? '#f5f0df' : '#ff8a80',
+                backgroundColor: 'rgba(23,25,24,0.72)',
+                fontFamily: 'Georgia, serif',
+                fontSize: '13px',
+                fontStyle: 'bold',
+                padding: {x: 3, y: 1}
+            }).setOrigin(0.5).setDepth(40);
+            this.tweens.add({
+                targets: label,
+                y: center.y - 24,
+                alpha: 0,
+                duration: 700,
+                ease: 'Quad.Out',
+                onComplete: () => label.destroy()
+            });
+        }
     }
 
     private showPickupChoice(
@@ -862,6 +1433,7 @@ export class OverworldScene extends Phaser.Scene {
         ).setOrigin(0.5));
 
         const buy = (offerId: string): void => {
+            const price = getShopOfferPrice(this.campaign, offerId);
             const result = purchaseShopOffer(this.campaign, offerId);
             if (!result.ok) {
                 this.emitState(messageEvent(
@@ -871,7 +1443,7 @@ export class OverworldScene extends Phaser.Scene {
             }
             this.campaign = result.state;
             this.emitState(messageEvent(
-                `${result.offer.label} purchased for $${result.offer.price}.`
+                `${result.offer.label} purchased for $${price ?? result.offer.price}.`
             ));
             this.showShop(boundedPage);
         };
@@ -881,9 +1453,10 @@ export class OverworldScene extends Phaser.Scene {
             const owned = offer.kind === 'upgrade'
                 ? this.campaign.player.installedModuleIds.includes(offer.upgradeId)
                 : offer.id === 'getaway-car' && carOwned;
-            const affordable = this.campaign.player.money >= offer.price;
+            const price = getShopOfferPrice(this.campaign, offer.id) ?? offer.price;
+            const affordable = this.campaign.player.money >= price;
             const button = this.add.text(0, y,
-                `${index + 1} · ${offer.label}  ·  ${owned ? 'OWNED' : `$${offer.price}`}`,
+                `${index + 1} · ${offer.label}  ·  ${owned ? 'OWNED' : `$${price}`}`,
                 {
                     color: owned ? '#b6bac2' : '#f5f0df',
                     backgroundColor: owned
@@ -906,6 +1479,16 @@ export class OverworldScene extends Phaser.Scene {
             button.on('pointerdown', () => buy(offer.id));
             container.add([button, description]);
         });
+
+        const sellButton = this.add.text(215, -274, 'SELL ▸', {
+            color: '#f5f0df',
+            backgroundColor: '#3f5b3a',
+            fontFamily: 'Georgia, serif',
+            fontSize: '15px',
+            padding: {x: 12, y: 8}
+        }).setOrigin(0.5).setScrollFactor(0).setInteractive({useHandCursor: true});
+        sellButton.on('pointerdown', () => this.showShopSelling());
+        container.add(sellButton);
 
         const addFooterButton = (
             x: number,
@@ -939,8 +1522,183 @@ export class OverworldScene extends Phaser.Scene {
         this.shopNextPageAction = nextPage;
         this.shopOfferActions = offers.map(offer => () => buy(offer.id));
         this.game.canvas.dataset.shopOpen = 'true';
+        this.game.canvas.dataset.shopMode = 'buy';
         this.game.canvas.dataset.shopPage = String(boundedPage);
         this.game.canvas.dataset.shopCarOwned = String(carOwned);
+    }
+
+    /**
+     * The shop's sell counter. Salvage finally has a purpose here, and carried
+     * loot can be turned into money instead of being abandoned on the floor.
+     */
+    private showShopSelling(page = 0): void {
+        this.destroyModal();
+        const player = this.campaign.player;
+        const sellable = player.backpack.filter(item =>
+            !player.quickSlotItemIds.includes(item.id)
+        );
+        const pageSize = 4;
+        const pageCount = Math.max(1, Math.ceil(sellable.length / pageSize));
+        const boundedPage = Phaser.Math.Clamp(page, 0, pageCount - 1);
+        const rows = sellable.slice(
+            boundedPage * pageSize,
+            boundedPage * pageSize + pageSize
+        );
+        const container = this.add.container(
+            this.cameras.main.width / 2,
+            this.cameras.main.height / 2
+        ).setScrollFactor(0).setDepth(500);
+        container.add(this.add.rectangle(0, 0, 574, 618, 0x171918, 0.98)
+            .setStrokeStyle(3, 0x6fae63));
+        container.add(this.add.text(0, -274, 'SELL COUNTER', {
+            color: '#a9e39a',
+            fontFamily: 'Georgia, serif',
+            fontSize: '27px'
+        }).setOrigin(0.5));
+        container.add(this.add.text(0, -238,
+            `Wallet $${player.money}  ·  Salvage ${player.scrap}  ·  ` +
+            `Page ${boundedPage + 1}/${pageCount}`,
+            {
+                color: '#f5f0df',
+                fontFamily: 'Georgia, serif',
+                fontSize: '17px',
+                align: 'center',
+                wordWrap: {width: 440}
+            }
+        ).setOrigin(0.5));
+
+        const actions: (() => void)[] = [];
+        const addRow = (
+            index: number,
+            label: string,
+            detail: string,
+            enabled: boolean,
+            action: () => void
+        ): void => {
+            const y = -186 + index * 84;
+            const button = this.add.text(0, y, label, {
+                color: enabled ? '#f5f0df' : '#b6bac2',
+                backgroundColor: enabled ? '#3f5b3a' : '#424646',
+                fontFamily: 'Georgia, serif',
+                fontSize: '17px',
+                align: 'center',
+                padding: {x: 14, y: 9},
+                fixedWidth: 500
+            }).setOrigin(0.5).setScrollFactor(0).setInteractive({useHandCursor: true});
+            const description = this.add.text(0, y + 33, detail, {
+                color: '#d8d2c4',
+                fontFamily: 'Georgia, serif',
+                fontSize: '13px',
+                align: 'center',
+                wordWrap: {width: 500}
+            }).setOrigin(0.5);
+            if (enabled) button.on('pointerdown', action);
+            container.add([button, description]);
+            actions.push(enabled ? action : () => undefined);
+        };
+
+        const sellAllScrap = (): void => {
+            const result = sellScrap(this.campaign, this.campaign.player.scrap);
+            if (!result.ok) {
+                this.emitState(messageEvent('You are carrying no salvage to sell.'));
+                return;
+            }
+            this.campaign = result.state;
+            this.emitState(messageEvent(`Sold salvage for $${result.paid}.`));
+            this.showShopSelling(boundedPage);
+        };
+        addRow(
+            0,
+            `1 · SELL ALL SALVAGE  ·  $${getScrapSaleValue(player.scrap)}`,
+            player.scrap > 0
+                ? `${player.scrap} salvage at $2 each.`
+                : 'Mine walls and break down loot to earn salvage.',
+            player.scrap > 0,
+            sellAllScrap
+        );
+
+        rows.slice(0, 3).forEach((item, index) => {
+            const definition = ITEM_DEFINITIONS[item.baseTypeId];
+            const value = getItemSaleValue(item);
+            addRow(
+                index + 1,
+                `${index + 2} · ${definition.label}` +
+                `${item.quantity > 1 ? ` ×${item.quantity}` : ''}  ·  $${value}`,
+                `${item.quality}${item.affixIds.length ? ` · ${item.affixIds.join(', ')}` : ''}`,
+                true,
+                () => {
+                    const result = sellBackpackItem(this.campaign, item.id);
+                    if (!result.ok) {
+                        this.emitState(messageEvent(
+                            result.reason === 'quick-slot-item'
+                                ? 'Clear that quick slot before selling the item.'
+                                : 'That item is no longer in your pack.'
+                        ));
+                        return;
+                    }
+                    this.campaign = result.state;
+                    this.emitState(messageEvent(
+                        `Sold ${definition.label} for $${result.paid}.`
+                    ));
+                    this.showShopSelling(boundedPage);
+                }
+            );
+        });
+        if (sellable.length === 0) {
+            container.add(this.add.text(0, 20,
+                'Nothing else in your pack can be sold.\n' +
+                'Quick-slotted items stay with you.',
+                {
+                    color: '#d8d2c4',
+                    fontFamily: 'Georgia, serif',
+                    fontSize: '15px',
+                    align: 'center'
+                }
+            ).setOrigin(0.5));
+        }
+
+        const addFooterButton = (
+            x: number,
+            label: string,
+            action: () => void,
+            color = '#382f54'
+        ): void => {
+            const button = this.add.text(x, 270, label, {
+                color: '#f5f0df',
+                backgroundColor: color,
+                fontFamily: 'Georgia, serif',
+                fontSize: '15px',
+                padding: {x: 14, y: 9}
+            }).setOrigin(0.5).setScrollFactor(0).setInteractive({useHandCursor: true});
+            button.on('pointerdown', action);
+            container.add(button);
+        };
+        const previousPage = () =>
+            this.showShopSelling((boundedPage - 1 + pageCount) % pageCount);
+        const nextPage = () =>
+            this.showShopSelling((boundedPage + 1) % pageCount);
+        addFooterButton(-185, '◀ PREV', previousPage);
+        addFooterButton(185, 'NEXT ▶', nextPage);
+        addFooterButton(0, 'CLOSE', () => this.destroyModal(), '#806b4f');
+        const buyButton = this.add.text(-215, -274, '◂ BUY', {
+            color: '#f5f0df',
+            backgroundColor: '#382f54',
+            fontFamily: 'Georgia, serif',
+            fontSize: '15px',
+            padding: {x: 12, y: 8}
+        }).setOrigin(0.5).setScrollFactor(0).setInteractive({useHandCursor: true});
+        buyButton.on('pointerdown', () => this.showShop());
+        container.add(buyButton);
+
+        this.activateModal(container);
+        this.modalConfirmAction = actions[0] ?? null;
+        this.modalCancelAction = () => this.destroyModal();
+        this.shopPreviousPageAction = previousPage;
+        this.shopNextPageAction = nextPage;
+        this.shopOfferActions = actions;
+        this.game.canvas.dataset.shopOpen = 'true';
+        this.game.canvas.dataset.shopMode = 'sell';
+        this.game.canvas.dataset.shopPage = String(boundedPage);
     }
 
     private openCasino(site: LevelServicePlacement): void {
@@ -1535,35 +2293,37 @@ export class OverworldScene extends Phaser.Scene {
         if (playFanfare) this.playVictoryFanfare();
     }
 
+    /**
+     * The victory horse is the Horsemaster horse at triple scale, drawn from the
+     * shared art module, with an animated dance step instead of a static pose.
+     */
     private createDancingVictoryHorse(): Phaser.GameObjects.Container {
         const horse = this.add.container(0, -20);
         const art = this.add.graphics();
-        art.fillStyle(0xa65d32);
-        art.fillEllipse(0, 8, 116, 54);
-        art.fillCircle(50, -25, 28);
-        art.fillStyle(0xe9ae68);
-        art.fillTriangle(36, -49, 43, -73, 53, -47);
-        art.fillTriangle(57, -47, 69, -70, 70, -39);
-        art.fillEllipse(61, -20, 18, 12);
-        art.fillStyle(0x4c2d22);
-        art.fillTriangle(25, -34, 43, -52, 34, -15);
-        art.fillTriangle(-53, -2, -88, -20, -58, 17);
-        art.fillStyle(0x171918);
-        art.fillCircle(58, -31, 3);
-        art.lineStyle(8, 0xa65d32);
-        art.lineBetween(-34, 24, -48, 61);
-        art.lineBetween(-8, 27, -2, 64);
-        art.lineBetween(21, 25, 11, 61);
-        art.lineBetween(42, 17, 56, 56);
-        art.lineStyle(4, 0x4c2d22);
-        art.lineBetween(-54, 61, -39, 61);
-        art.lineBetween(-7, 64, 8, 64);
-        art.lineBetween(6, 61, 22, 61);
-        art.lineBetween(52, 56, 68, 56);
-        art.fillStyle(0xefc75e);
-        art.fillTriangle(39, -63, 48, -88, 56, -62);
-        art.fillTriangle(50, -62, 62, -88, 67, -56);
-        art.fillRect(39, -64, 29, 9);
+        const pose = {phase: 0};
+        const redraw = (): void => {
+            art.clear();
+            const swing = Math.sin(pose.phase) * 6;
+            drawHorse(art, 0, 0, {
+                scale: 3,
+                bob: Math.sin(pose.phase * 2) * 1.6,
+                headDip: Math.sin(pose.phase) * -2,
+                tailSway: swing,
+                legOffsets: [swing, -swing, -swing, swing],
+                shadow: true
+            });
+        };
+        redraw();
+        if (!this.reducedMotion) {
+            this.tweens.add({
+                targets: pose,
+                phase: Math.PI * 2,
+                duration: 900,
+                repeat: -1,
+                ease: 'Linear',
+                onUpdate: redraw
+            });
+        }
         const leftNote = this.add.text(-116, -46, '♪', {
             color: '#67d5e8',
             fontSize: '34px',
@@ -1720,13 +2480,21 @@ export class OverworldScene extends Phaser.Scene {
             fontFamily: 'Georgia, serif',
             fontSize: '27px'
         }).setOrigin(0.5));
+        const offerStats = getItemWeaponStats(offer);
+        const equippedStats = getWeaponStats(this.campaign.player);
+        const weaponLine = ITEM_DEFINITIONS[offer.baseTypeId].category === 'weapon'
+            ? `\n${describeWeaponStats(offerStats)}` +
+                `\nvs ${equippedStats.label}: ` +
+                `${describeWeaponComparison(equippedStats, offerStats)}`
+            : '';
         container.add(this.add.text(0, -70,
             `${definition.label} · ${offer.quality.toUpperCase()}\n` +
-            `${offer.affixIds.length ? offer.affixIds.join(', ') : 'No affixes'}`,
+            `${offer.affixIds.length ? offer.affixIds.join(', ') : 'No affixes'}` +
+            weaponLine,
             {
                 color: '#f5f0df',
                 fontFamily: 'Georgia, serif',
-                fontSize: '17px',
+                fontSize: '15px',
                 align: 'center'
             }
         ).setOrigin(0.5));
@@ -1824,19 +2592,27 @@ export class OverworldScene extends Phaser.Scene {
             ? 0
             : Phaser.Math.Clamp(selectedIndex, 0, items.length - 1);
         const selected = items[boundedIndex] ?? null;
-        const weapon = this.campaign.player.equippedWeapon;
         const utility = this.campaign.player.equippedUtility;
         const container = this.add.container(this.cameras.main.width / 2, this.cameras.main.height / 2)
             .setScrollFactor(0)
             .setDepth(500);
         container.add(this.add.rectangle(0, 0, 520, 430, 0x171918, 0.97)
             .setStrokeStyle(3, 0xefc75e));
+        const equippedStats = getWeaponStats(this.campaign.player);
+        const selectedIsWeapon = selected !== null &&
+            ITEM_DEFINITIONS[selected.baseTypeId].category === 'weapon';
+        const selectedStats = selectedIsWeapon ? getItemWeaponStats(selected) : null;
         container.add(this.add.text(-225, -188,
             [
                 'INVENTORY',
-                `Weapon: ${weapon ? ITEM_DEFINITIONS[weapon.baseTypeId].label : 'Improvised Dagger'}`,
+                // Spelling out damage and reach here is what makes swapping
+                // weapons a decision rather than a guess.
+                `Weapon: ${describeWeaponStats(equippedStats, {
+                    ammo: this.campaign.player.bowAmmo
+                })}`,
                 `Utility: ${utility ? ITEM_DEFINITIONS[utility.baseTypeId].label : 'None'}`,
-                `Money $${this.campaign.player.money}  ·  Arrows ${this.campaign.player.bowAmmo}  ·  Slots ${items.length}/8`,
+                `Money $${this.campaign.player.money}  ·  Arrows ${this.campaign.player.bowAmmo}` +
+                    `  ·  Slots ${items.length}/${this.campaign.player.backpackCapacity}`,
                 '',
                 selected
                     ? `${boundedIndex + 1}/${items.length}  ${ITEM_DEFINITIONS[selected.baseTypeId].label}`
@@ -1845,17 +2621,21 @@ export class OverworldScene extends Phaser.Scene {
                     ? `${selected.quality.toUpperCase()}  ×${selected.quantity}` +
                         `${selected.charges === null ? '' : `  ·  ${selected.charges} charges`}`
                     : 'Backpack empty',
+                selectedStats
+                    ? `${describeWeaponStats(selectedStats)}  ·  vs equipped: ` +
+                        `${describeWeaponComparison(equippedStats, selectedStats)}`
+                    : '',
                 selected?.affixIds.length
                     ? `Affixes: ${selected.affixIds.join(', ')}`
                     : selected ? 'Affixes: none' : '',
                 selected?.baseTypeId === 'mystery-orb'
                     ? `Orb choices: ${selected.rolledChoiceIds.join(', ')}`
                     : ''
-            ].join('\n'),
+            ].filter((line, index) => line !== '' || index === 4).join('\n'),
             {
                 color: '#f5f0df',
                 fontFamily: 'Georgia, serif',
-                fontSize: '17px',
+                fontSize: '16px',
                 lineSpacing: 5,
                 wordWrap: {width: 450}
             }
@@ -1953,6 +2733,67 @@ export class OverworldScene extends Phaser.Scene {
         this.modalCancelAction = () => this.destroyModal();
     }
 
+    /**
+     * An unobtrusive legend: it is never shown unprompted, but one tap explains
+     * every marker, item category, monster, and wall rule in the maze.
+     */
+    showMazeHelp(page = 0): void {
+        if (this.encounterOpen) return;
+        this.destroyModal();
+        const pages = buildMazeHelpPages(this.campaign);
+        const boundedPage = Phaser.Math.Clamp(page, 0, pages.length - 1);
+        const helpPage = pages[boundedPage]!;
+        const container = this.add.container(
+            this.cameras.main.width / 2,
+            this.cameras.main.height / 2
+        ).setScrollFactor(0).setDepth(500);
+        container.add(this.add.rectangle(0, 0, 590, 560, 0x171918, 0.98)
+            .setStrokeStyle(3, 0x67d5e8));
+        container.add(this.add.text(0, -244, helpPage.title, {
+            color: '#7fe0f5',
+            fontFamily: 'Georgia, serif',
+            fontSize: '25px'
+        }).setOrigin(0.5));
+        container.add(this.add.text(0, -206,
+            `Page ${boundedPage + 1}/${pages.length}`,
+            {color: '#b6b09f', fontFamily: 'Georgia, serif', fontSize: '14px'}
+        ).setOrigin(0.5));
+        container.add(this.add.text(-262, -178, helpPage.body, {
+            color: '#f5f0df',
+            fontFamily: 'Georgia, serif',
+            fontSize: '15px',
+            lineSpacing: 6,
+            wordWrap: {width: 524}
+        }));
+
+        const addFooterButton = (x: number, label: string, action: () => void): void => {
+            const button = this.add.text(x, 244, label, {
+                color: '#f5f0df',
+                backgroundColor: label === 'CLOSE' ? '#806b4f' : '#382f54',
+                fontFamily: 'Georgia, serif',
+                fontSize: '15px',
+                padding: {x: 14, y: 9}
+            }).setOrigin(0.5).setScrollFactor(0).setInteractive({useHandCursor: true});
+            button.on('pointerdown', action);
+            container.add(button);
+        };
+        const previousPage = (): void =>
+            this.showMazeHelp((boundedPage - 1 + pages.length) % pages.length);
+        const nextPage = (): void =>
+            this.showMazeHelp((boundedPage + 1) % pages.length);
+        addFooterButton(-190, '◀ PREV', previousPage);
+        addFooterButton(190, 'NEXT ▶', nextPage);
+        addFooterButton(0, 'CLOSE', () => this.destroyModal());
+
+        this.activateModal(container);
+        this.modalConfirmAction = nextPage;
+        this.modalCancelAction = () => this.destroyModal();
+        this.shopPreviousPageAction = previousPage;
+        this.shopNextPageAction = nextPage;
+        this.game.canvas.dataset.mazeHelpOpen = 'true';
+        this.game.canvas.dataset.mazeHelpPage = String(boundedPage);
+    }
+
     private activateModal(container: Phaser.GameObjects.Container): void {
         // Modals are laid out in game pixels, so the world zoom used to keep
         // maze cells readable is cancelled here to stop panels overflowing.
@@ -1986,7 +2827,10 @@ export class OverworldScene extends Phaser.Scene {
         this.shopOfferActions = [];
         this.encounterResultModalOpen = false;
         delete this.game.canvas.dataset.encounterOverlay;
+        delete this.game.canvas.dataset.mazeHelpOpen;
+        delete this.game.canvas.dataset.mazeHelpPage;
         delete this.game.canvas.dataset.shopOpen;
+        delete this.game.canvas.dataset.shopMode;
         delete this.game.canvas.dataset.shopPage;
         delete this.game.canvas.dataset.shopCarOwned;
         delete this.game.canvas.dataset.spaceOptionsOpen;
@@ -2000,18 +2844,45 @@ export class OverworldScene extends Phaser.Scene {
         this.options.onStateChanged(this.campaign, event);
     }
 
+    /**
+     * The exit is drawn as little stairs going down so its meaning is obvious
+     * without a legend. The spawn corner carries no marker: the player is
+     * standing on it, and a coloured square there told nobody anything.
+     */
     private drawLandmarks(): void {
-        this.add.rectangle(CELL_SIZE * 1.5, CELL_SIZE * 1.5, 14, 14, 0x3b9c58)
-            .setDepth(5);
         const size = this.campaign.overworld.maze.length;
-        this.add.rectangle(
-            (size - 1.5) * CELL_SIZE,
-            (size - 1.5) * CELL_SIZE,
-            18,
-            18,
-            0xca4338
-        ).setStrokeStyle(2, 0x171918).setDepth(5);
+        const centerX = (size - 1.5) * CELL_SIZE;
+        const centerY = (size - 1.5) * CELL_SIZE;
+        const stairs = this.add.graphics().setDepth(5);
+        const width = CELL_SIZE - 6;
+        const left = centerX - width / 2;
+        const top = centerY - width / 2;
+        // A dark shaft behind four descending treads reads as "down" at a glance.
+        stairs.fillStyle(0x14161a, 1).fillRect(left, top, width, width);
+        const steps = 4;
+        for (let step = 0; step < steps; step++) {
+            const inset = (step * width) / (steps * 2);
+            const depth = width / steps;
+            stairs.fillStyle(step % 2 === 0 ? 0x9aa3a8 : 0x7d868b, 1);
+            stairs.fillRect(left + inset, top + step * depth, width - inset * 2, depth * 0.62);
+            stairs.fillStyle(0x2b3034, 1);
+            stairs.fillRect(
+                left + inset,
+                top + step * depth + depth * 0.62,
+                width - inset * 2,
+                depth * 0.38
+            );
+        }
+        stairs.lineStyle(2, 0x0f1113, 1).strokeRect(left, top, width, width);
+        this.add.text(centerX, centerY + CELL_SIZE * 0.82, 'STAIRS DOWN', {
+            color: '#171918',
+            backgroundColor: 'rgba(245,240,223,0.86)',
+            fontFamily: 'Georgia, serif',
+            fontSize: '9px',
+            padding: {x: 2, y: 1}
+        }).setOrigin(0.5).setDepth(6);
     }
+
 
     private createObjectiveVisuals(): void {
         for (const placement of this.campaign.overworld.objectives) {
@@ -2102,20 +2973,36 @@ export class OverworldScene extends Phaser.Scene {
         }
     }
 
+    /**
+     * Draws the whole grid into one retained Graphics object: a base fill per
+     * cell, a faint speckle on the floor so it reads as ground without hiding
+     * loot, and a tag-driven texture on each wall.
+     */
     private drawMaze(): void {
-        this.mazeGraphics.clear();
-        for (let y = 0; y < this.campaign.overworld.maze.length; y++) {
+        const graphics = this.mazeGraphics;
+        graphics.clear();
+        const size = this.campaign.overworld.maze.length;
+        for (let y = 0; y < size; y++) {
             const row = this.campaign.overworld.maze[y]!;
             for (let x = 0; x < row.length; x++) {
                 const cell = row[x]!;
-                const color = cell.kind === 'passage'
-                    ? 0xf4f1e8
-                    : colorToNumber(MATERIALS[cell.materialId].color);
-                this.mazeGraphics.fillStyle(color).fillRect(
-                    x * CELL_SIZE,
-                    y * CELL_SIZE,
-                    CELL_SIZE,
-                    CELL_SIZE
+                const originX = x * CELL_SIZE;
+                const originY = y * CELL_SIZE;
+                if (cell.kind === 'passage') {
+                    graphics.fillStyle(0xf4f1e8, 1)
+                        .fillRect(originX, originY, CELL_SIZE, CELL_SIZE);
+                    drawFloorTexture(graphics, originX, originY);
+                    continue;
+                }
+                const base = colorToNumber(MATERIALS[cell.materialId].color);
+                graphics.fillStyle(base, 1)
+                    .fillRect(originX, originY, CELL_SIZE, CELL_SIZE);
+                drawMaterialPattern(
+                    graphics,
+                    MATERIALS[cell.materialId].tags,
+                    base,
+                    originX,
+                    originY
                 );
             }
         }
@@ -2128,13 +3015,76 @@ export class OverworldScene extends Phaser.Scene {
         this.syncTrapGraphics();
     }
 
-    private syncPlayerMarker(): void {
+    /**
+     * The player is a little rolling ball: a shaded sphere with two stripes
+     * whose rotation follows the direction of travel, so movement reads as
+     * rolling rather than sliding.
+     */
+    private createPlayerBall(): Phaser.GameObjects.Container {
+        const radius = CELL_SIZE / 3;
+        const container = this.add.container(0, 0).setDepth(30);
+        const shadow = this.add.ellipse(0, radius * 0.85, radius * 1.7, radius * 0.6, 0x171918, 0.3);
+        const art = this.add.graphics();
+        art.fillStyle(0x2468d8, 1).fillCircle(0, 0, radius);
+        art.fillStyle(0x5b96ef, 1).fillCircle(-radius * 0.3, -radius * 0.32, radius * 0.5);
+        art.lineStyle(2.5, 0x102d66, 1);
+        art.lineBetween(-radius * 0.82, -radius * 0.32, radius * 0.82, -radius * 0.32);
+        art.lineBetween(-radius * 0.82, radius * 0.32, radius * 0.82, radius * 0.32);
+        art.lineStyle(2, 0x0d2350, 1).strokeCircle(0, 0, radius);
+        art.fillStyle(0xdfe9ff, 0.9).fillCircle(-radius * 0.34, -radius * 0.42, radius * 0.2);
+        this.playerBallArt = art;
+        container.add([shadow, art]);
+        return container;
+    }
+
+    private syncPlayerMarker(direction?: DirectionId): void {
         const {x, y} = this.campaign.overworld.playerPosition;
         this.playerMarker.setPosition(
             x * CELL_SIZE + CELL_SIZE / 2,
             y * CELL_SIZE + CELL_SIZE / 2
         );
+        if (direction) {
+            // A quarter turn per cell, signed by travel direction. Vertical
+            // moves roll the same way a ball would if you watched from the side.
+            const spin = direction === 'left' || direction === 'up' ? -90 : 90;
+            this.playerRollAngle += spin;
+            if (this.reducedMotion) {
+                this.playerBallArt.setAngle(this.playerRollAngle);
+            } else {
+                this.tweens.add({
+                    targets: this.playerBallArt,
+                    angle: this.playerRollAngle,
+                    duration: 150,
+                    ease: 'Sine.Out'
+                });
+            }
+        }
         if (this.playerCameraConfigured) this.centerCameraOnPlayer();
+    }
+
+    /**
+     * Walls are tappable like items and monsters: a tap reports the material,
+     * whether the current pick can cut it, and what it yields.
+     */
+    private createWallInspector(): void {
+        const pixels = this.campaign.overworld.maze.length * CELL_SIZE;
+        const zone = this.add.zone(0, 0, pixels, pixels).setOrigin(0).setDepth(1);
+        zone.setInteractive({useHandCursor: true});
+        zone.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+            if (this.modalContainer || this.encounterOpen) return;
+            const position = {
+                x: Math.floor(pointer.worldX / CELL_SIZE),
+                y: Math.floor(pointer.worldY / CELL_SIZE)
+            };
+            const material = getWallMaterial(this.campaign.overworld.maze, position);
+            if (!material) return;
+            this.emitState(messageEvent(describeWallForPlayer(
+                material,
+                this.campaign.player,
+                position,
+                this.campaign.overworld
+            )));
+        });
     }
 
     private configurePlayerCamera(): void {
@@ -2359,6 +3309,11 @@ export class OverworldScene extends Phaser.Scene {
      * bindings, including the two-step targeting flows.
      */
     performControl(control: OverworldControl): void {
+        // Pause stays reachable even while a modal or encounter owns the scene.
+        if (control.kind === 'menu') {
+            this.options.onMenuRequested?.();
+            return;
+        }
         if (
             this.encounterOpen ||
             this.modalContainer ||
@@ -2394,6 +3349,9 @@ export class OverworldScene extends Phaser.Scene {
             case 'use':
                 this.useQuickSlot();
                 break;
+            case 'quick-slot':
+                this.useQuickSlot(control.slot);
+                break;
             case 'interact':
                 this.interact();
                 break;
@@ -2402,6 +3360,9 @@ export class OverworldScene extends Phaser.Scene {
                 break;
             case 'inventory':
                 this.showInventory();
+                break;
+            case 'cycle-objective':
+                this.perform({kind: 'cycle-objective'});
                 break;
         }
     }

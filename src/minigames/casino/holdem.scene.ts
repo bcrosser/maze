@@ -1,5 +1,7 @@
 import Phaser from 'phaser';
 
+import {getControlDeck} from '../../app/control-deck-host';
+import {HOLDEM_CONTROL_SCHEME, type ControlEvent} from '../../app/control-scheme';
 import {Mulberry32Random} from '../../domain/random/random-source';
 import {
     actHoldem,
@@ -68,8 +70,10 @@ export class HoldemScene extends Phaser.Scene {
         this.ante = clampAnte(Math.min(5, data.bankroll), data.bankroll);
         this.notifiedHand = 0;
         this.input.keyboard?.on('keydown', this.handleKeyDown, this);
+        getControlDeck(this)?.setScheme(HOLDEM_CONTROL_SCHEME, this.handleControlEvent);
         this.events.once('shutdown', () => {
             this.input.keyboard?.off('keydown', this.handleKeyDown, this);
+            getControlDeck(this)?.clearScheme(HOLDEM_CONTROL_SCHEME.id);
             delete this.game.canvas.dataset.casinoGame;
             delete this.game.canvas.dataset.casinoPhase;
             delete this.game.canvas.dataset.casinoBankroll;
@@ -105,6 +109,35 @@ export class HoldemScene extends Phaser.Scene {
         }
         if (event.key === 'ArrowLeft') this.adjustAnte(-1);
         if (event.key === 'ArrowRight') this.adjustAnte(1);
+    };
+
+    private readonly handleControlEvent = (event: ControlEvent): void => {
+        if (event.kind === 'direction') {
+            if (event.phase !== 'press') return;
+            this.adjustAnte(event.direction === 'left' ? -1 : 1);
+            return;
+        }
+        if (event.kind !== 'button' || event.phase !== 'press') return;
+        switch (event.id) {
+            case 'deal':
+                this.deal();
+                break;
+            case 'check': {
+                const legal = getHoldemLegalActions(this.table);
+                if (legal.includes('call')) this.act('call');
+                else if (legal.includes('check')) this.act('check');
+                break;
+            }
+            case 'bet':
+                this.act('bet');
+                break;
+            case 'raise':
+                this.act('raise');
+                break;
+            case 'fold':
+                this.act('fold');
+                break;
+        }
     };
 
     private deal(): void {

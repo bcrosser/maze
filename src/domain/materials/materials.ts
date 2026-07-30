@@ -52,3 +52,75 @@ export const MATERIALS: Readonly<typeof materialRegistry> = Object.freeze(materi
 export const MATERIAL_IDS: readonly MaterialId[] = Object.freeze(
     Object.keys(materialRegistry) as MaterialId[]
 );
+
+/** Minimal grid shape these helpers need, so materials stay maze-agnostic. */
+interface MaterialCellGrid {
+    readonly [row: number]: {
+        readonly [column: number]: {
+            readonly kind: 'passage' | 'wall';
+            readonly materialId: MaterialId | null;
+        } | undefined;
+    } | undefined;
+}
+
+export interface WallMaterialView {
+    readonly id: MaterialId;
+    readonly definition: MaterialDefinition;
+    /** Undefined for materials that no mining tool can cut. */
+    readonly hardness: number | undefined;
+}
+
+const ADJACENT_OFFSETS: readonly {readonly x: number; readonly y: number}[] = Object.freeze([
+    Object.freeze({x: 0, y: -1}),
+    Object.freeze({x: 1, y: 0}),
+    Object.freeze({x: 0, y: 1}),
+    Object.freeze({x: -1, y: 0})
+]);
+
+export function getMaterialHardness(id: MaterialId): number | undefined {
+    const definition: MaterialDefinition = MATERIALS[id];
+    return 'hardness' in definition ? definition.hardness : undefined;
+}
+
+/**
+ * The wall material at a cell, or `null` for a passage or an out-of-bounds
+ * coordinate. Gameplay should read materials through this rather than comparing
+ * rendered colors.
+ */
+export function getWallMaterial(
+    maze: MaterialCellGrid,
+    position: {readonly x: number; readonly y: number}
+): WallMaterialView | null {
+    const cell = maze[position.y]?.[position.x];
+    if (!cell || cell.kind !== 'wall' || cell.materialId === null) return null;
+    return {
+        id: cell.materialId,
+        definition: MATERIALS[cell.materialId],
+        hardness: getMaterialHardness(cell.materialId)
+    };
+}
+
+/** Distinct wall materials orthogonally touching a cell, in reading order. */
+export function getAdjacentWallMaterials(
+    maze: MaterialCellGrid,
+    position: {readonly x: number; readonly y: number}
+): readonly WallMaterialView[] {
+    const seen = new Set<MaterialId>();
+    const found: WallMaterialView[] = [];
+    for (const offset of ADJACENT_OFFSETS) {
+        const material = getWallMaterial(maze, {
+            x: position.x + offset.x,
+            y: position.y + offset.y
+        });
+        if (!material || seen.has(material.id)) continue;
+        seen.add(material.id);
+        found.push(material);
+    }
+    return found;
+}
+
+/** True when the given mining power can cut through the material at all. */
+export function canMineMaterial(id: MaterialId, miningPower: number): boolean {
+    const hardness = getMaterialHardness(id);
+    return hardness !== undefined && miningPower >= hardness;
+}

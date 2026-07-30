@@ -751,3 +751,125 @@ describe('platformer result math', () => {
         });
     });
 });
+
+describe('dropping through raised platforms', () => {
+    /** Ground plus one raised ledge the player can stand on and drop from. */
+    function ledgeLevel(): PlatformerLevel {
+        const base = flatLevel();
+        const ledge: PlatformRect = {
+            ...platform('ledge-high-1-0'),
+            x: 60,
+            y: 380,
+            width: 160,
+            height: 16
+        };
+        return {...base, platforms: [...base.platforms, ledge]};
+    }
+
+    function onLedge(level: PlatformerLevel): PlatformerState {
+        return {
+            ...createPlatformerState(level),
+            x: 100,
+            y: 380 - 40,
+            grounded: true,
+            groundedPlatformId: 'ledge-high-1-0',
+            coyoteMs: 100
+        };
+    }
+
+    it('falls through the ledge underfoot while down is held', () => {
+        const level = ledgeLevel();
+        const dropped = stepFrames(onLedge(level), level, 14, {
+            ...IDLE,
+            dropPressed: true
+        });
+
+        expect(dropped.events).toContain('dropped-through');
+        // The player's feet are past the ledge top rather than resting on it.
+        expect(dropped.state.y + 40).toBeGreaterThan(380);
+        expect(dropped.state.y).toBeGreaterThan(340);
+        expect(dropped.state.groundedPlatformId).not.toBe('ledge-high-1-0');
+    });
+
+    it('lands on the ground below rather than falling out of the level', () => {
+        const level = ledgeLevel();
+        let state = stepFrames(onLedge(level), level, 6, {
+            ...IDLE,
+            dropPressed: true
+        }).state;
+        state = stepFrames(state, level, 40).state;
+
+        expect(state.groundedPlatformId).toBe('ground-0');
+        expect(state.grounded).toBe(true);
+        expect(state.status).toBe('active');
+    });
+
+    it('refuses to drop through the ground itself', () => {
+        const level = flatLevel();
+        const attempted = stepFrames(groundedState(level), level, 12, {
+            ...IDLE,
+            dropPressed: true
+        });
+
+        expect(attempted.events).not.toContain('dropped-through');
+        expect(attempted.state.grounded).toBe(true);
+        expect(attempted.state.groundedPlatformId).toBe('ground-0');
+    });
+
+    it('closes the drop window so the platform catches the player again', () => {
+        const level = ledgeLevel();
+        const dropped = stepFrames(onLedge(level), level, 8, {
+            ...IDLE,
+            dropPressed: true
+        }).state;
+        const settled = stepFrames(dropped, level, 20).state;
+
+        expect(settled.dropThroughMs).toBe(0);
+        expect(settled.dropThroughPlatformId).toBeNull();
+    });
+
+    it('prefers dropping over jumping when both are pressed', () => {
+        const level = ledgeLevel();
+        const both = stepFrames(onLedge(level), level, 4, {
+            ...IDLE,
+            jumpPressed: true,
+            jumpHeld: true,
+            dropPressed: true
+        });
+
+        expect(both.events).toContain('dropped-through');
+        expect(both.events).not.toContain('jump');
+    });
+});
+
+describe('generated vertical geometry', () => {
+    it('stacks optional upper ledges within a single jump of each other', () => {
+        for (let seed = 0; seed < 24; seed++) {
+            const level = createGeneratedPlatformerLevel(
+                new Mulberry32Random(seed * 31 + 7),
+                {difficulty: 'standard', levelTier: seed % 6, modifiers: MODIFIERS}
+            );
+            const upper = level.platforms.filter(candidate =>
+                candidate.id.startsWith('ledge-high-')
+            );
+            expect(upper.length).toBeGreaterThan(0);
+            expect(validatePlatformerLevel(level)).toEqual({valid: true, errors: []});
+            for (const ledge of upper) {
+                expect(ledge.y).toBeGreaterThan(0);
+                // Every tier stands on top of a surface below it, never floating
+                // off the top of the world.
+                expect(ledge.y).toBeLessThan(level.height);
+                const support = level.platforms
+                    .filter(candidate =>
+                        candidate.id !== ledge.id &&
+                        candidate.y > ledge.y &&
+                        candidate.x < ledge.x + ledge.width + 90 &&
+                        candidate.x + candidate.width > ledge.x - 90
+                    )
+                    .sort((left, right) => left.y - right.y)[0];
+                expect(support).toBeDefined();
+                if (support) expect(support.y - ledge.y).toBeLessThanOrEqual(92);
+            }
+        }
+    });
+});

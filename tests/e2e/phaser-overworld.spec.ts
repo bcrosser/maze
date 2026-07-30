@@ -10,8 +10,8 @@ import {CAMPAIGN_VICTORY_FLAG} from '../../src/domain/campaign/level-progression
 import {initializeLevelContent} from '../../src/domain/overworld/level-content-generator';
 import {
     CASINO_HEIST_UNLOCK_FLAG,
-    getCurrentObjective,
     getObjectiveStatus,
+    getTrackedObjective,
     OBJECTIVE_BY_ID,
     type ObjectiveId
 } from '../../src/domain/overworld/level-objectives';
@@ -520,36 +520,6 @@ async function tapGamePoint(page: Page, gameX: number, gameY: number): Promise<v
     }
 }
 
-async function holdGamePoint(
-    page: Page,
-    gameX: number,
-    gameY: number,
-    durationMs: number
-): Promise<void> {
-    const point = await gamePointOnScreen(page, gameX, gameY);
-    if (await usesTouchInput(page)) {
-        const session = await page.context().newCDPSession(page);
-        try {
-            await session.send('Input.dispatchTouchEvent', {
-                type: 'touchStart',
-                touchPoints: [{x: point.x, y: point.y, id: 1}]
-            });
-            await page.waitForTimeout(durationMs);
-            await session.send('Input.dispatchTouchEvent', {
-                type: 'touchEnd',
-                touchPoints: []
-            });
-        } finally {
-            await session.detach();
-        }
-    } else {
-        await page.mouse.move(point.x, point.y);
-        await page.mouse.down();
-        await page.waitForTimeout(durationMs);
-        await page.mouse.up();
-    }
-}
-
 async function dragGamePoint(
     page: Page,
     fromGameX: number,
@@ -590,6 +560,73 @@ async function dragGamePoint(
 
 async function pressInteract(page: Page): Promise<void> {
     await page.locator('#control-interact').click();
+}
+
+/** Taps a button on the shared control deck below the canvas. */
+async function pressDeckButton(page: Page, buttonId: string): Promise<void> {
+    await page.locator(`#control-${buttonId}`).click();
+}
+
+async function elementCenter(
+    page: Page,
+    selector: string
+): Promise<{readonly x: number; readonly y: number}> {
+    const bounds = await page.locator(selector).boundingBox();
+    expect(bounds, `${selector} is visible`).not.toBeNull();
+    if (!bounds) throw new Error(`Expected ${selector} to be visible.`);
+    return {x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2};
+}
+
+async function holdElement(
+    page: Page,
+    selector: string,
+    durationMs: number
+): Promise<void> {
+    const point = await elementCenter(page, selector);
+    if (await usesTouchInput(page)) {
+        const session = await page.context().newCDPSession(page);
+        try {
+            await session.send('Input.dispatchTouchEvent', {
+                type: 'touchStart',
+                touchPoints: [{x: point.x, y: point.y, id: 1}]
+            });
+            await page.waitForTimeout(durationMs);
+            await session.send('Input.dispatchTouchEvent', {
+                type: 'touchEnd',
+                touchPoints: []
+            });
+        } finally {
+            await session.detach();
+        }
+    } else {
+        await page.mouse.move(point.x, point.y);
+        await page.mouse.down();
+        await page.waitForTimeout(durationMs);
+        await page.mouse.up();
+    }
+}
+
+async function holdDeckButton(
+    page: Page,
+    buttonId: string,
+    durationMs: number
+): Promise<void> {
+    await holdElement(page, `#control-${buttonId}`, durationMs);
+}
+
+async function holdDeckDirection(
+    page: Page,
+    direction: 'up' | 'down' | 'left' | 'right',
+    durationMs: number
+): Promise<void> {
+    await holdElement(page, `.move-btn[data-direction="${direction}"]`, durationMs);
+}
+
+async function pressDeckDirection(
+    page: Page,
+    direction: 'up' | 'down' | 'left' | 'right'
+): Promise<void> {
+    await page.locator(`.move-btn[data-direction="${direction}"]`).click();
 }
 
 async function tapCircuitCell(page: Page, index: number): Promise<void> {
@@ -635,9 +672,10 @@ test('generates, autosaves, resumes, and renders a distributed roguelike maze', 
     await expect(page.locator('#money')).toHaveText('$40');
     await expect(page.locator('canvas[data-runtime="phaser"]'))
         .toHaveAttribute('data-service-sites', /blackjack@.*holdem@/);
-    const currentObjective = getCurrentObjective(beforeMove);
-    if (!currentObjective) throw new Error('Expected a current objective.');
-    await expect(page.locator('#objective')).toHaveText(currentObjective.label);
+    // The HUD tracks the nearest available objective, not the roster's first.
+    const trackedObjective = getTrackedObjective(beforeMove);
+    if (!trackedObjective) throw new Error('Expected a tracked objective.');
+    await expect(page.locator('#objective')).toHaveText(trackedObjective.label);
     await expect(page.locator('#exit-status')).toHaveText('Locked 0 / 1');
 
     const start = beforeMove.overworld.playerPosition;
@@ -841,7 +879,7 @@ test('shows large mobile controls without page scrolling', async ({page}, testIn
     if (!pad) throw new Error('Expected a visible movement pad.');
     expect(pad.width).toBeGreaterThanOrEqual(96);
     expect(pad.height).toBeGreaterThanOrEqual(96);
-    for (const selector of ['#control-attack', '#control-use', '#control-inventory']) {
+    for (const selector of ['#control-attack', '#quick-slot-0', '#control-inventory']) {
         const button = await page.locator(selector).boundingBox();
         expect(button, `${selector} is visible`).not.toBeNull();
         expect(button!.height, `${selector} touch height`).toBeGreaterThanOrEqual(40);
@@ -1281,8 +1319,9 @@ test('Space has continuous movement, manual fire, bombs, and a visible 5:00 miss
         .toBeGreaterThan(startingX);
     await expect.poll(async () => Number(await canvas.getAttribute('data-shooter-y')))
         .toBeGreaterThan(startingY);
-    await holdGamePoint(page, 602, 568, 120);
-    await tapGamePoint(page, 502, 592);
+    await expect(page.locator('#control-deck')).toHaveAttribute('data-scheme', 'shooter');
+    await holdDeckButton(page, 'fire', 120);
+    await pressDeckButton(page, 'bomb');
     await expect(canvas).toHaveAttribute('data-shooter-terminal', '');
 });
 
@@ -1295,8 +1334,10 @@ test('Space accepts joystick, fire, and bomb touches at the same time', async ({
     const canvas = page.locator('canvas[data-runtime="phaser"]');
     const joystickStart = await gamePointOnScreen(page, 86, 578);
     const joystickMoved = await gamePointOnScreen(page, 131, 578);
-    const fire = await gamePointOnScreen(page, 602, 568);
-    const bomb = await gamePointOnScreen(page, 502, 592);
+    // Fire and Bomb now live on the shared deck, so the third simultaneous
+    // contact has to land on the DOM button rather than the canvas.
+    const fire = await elementCenter(page, '#control-fire');
+    const bomb = await elementCenter(page, '#control-bomb');
     const startingX = Number(await canvas.getAttribute('data-shooter-x'));
     const startingBombs = Number(await canvas.getAttribute('data-shooter-bombs'));
     const session = await page.context().newCDPSession(page);
@@ -1361,15 +1402,16 @@ test('Platformer generation produces a movable, jumpable combat level', async ({
     const canvas = page.locator('canvas[data-runtime="phaser"]');
     await expect(page.locator('#game-main')).toHaveAttribute('data-encounter', 'platformer');
     await expect(canvas).toHaveAttribute('data-platformer-status', 'active');
+    await expect(page.locator('#control-deck')).toHaveAttribute('data-scheme', 'platformer');
     const startingX = Number(await canvas.getAttribute('data-platformer-x'));
-    await holdGamePoint(page, 136, 610, 220);
-    await tapGamePoint(page, 522, 610);
+    await holdDeckDirection(page, 'right', 220);
+    await pressDeckButton(page, 'jump');
     await page.waitForTimeout(80);
     await expect.poll(async () => Number(await canvas.getAttribute('data-platformer-x')))
         .toBeGreaterThan(startingX);
     await expect.poll(async () => Number(await canvas.getAttribute('data-platformer-velocity-y')))
         .toBeLessThan(0);
-    await tapGamePoint(page, 612, 610);
+    await pressDeckButton(page, 'fire');
     expect(Number(await canvas.getAttribute('data-platformer-health'))).toBeGreaterThan(0);
 });
 
@@ -1470,15 +1512,16 @@ test('Horsemaster generates a fresh Frogger course and accepts touch hops in fou
     expect(await canvas.getAttribute('data-horsemaster-course-signature'))
         .not.toBe(firstSignature);
 
+    await expect(page.locator('#control-deck')).toHaveAttribute('data-scheme', 'horsemaster');
     const startingX = Number(await canvas.getAttribute('data-horsemaster-x'));
-    await tapGamePoint(page, 170, 627);
+    await pressDeckDirection(page, 'right');
     await expect.poll(async () => Number(
         await canvas.getAttribute('data-horsemaster-x')
     )).not.toBe(startingX);
     await expect(canvas).toHaveAttribute('data-horsemaster-hopping', 'false');
     const startingRow = Number(await canvas.getAttribute('data-horsemaster-row'));
     const startingLives = Number(await canvas.getAttribute('data-horsemaster-lives'));
-    await tapGamePoint(page, 556, 619);
+    await pressDeckButton(page, 'hop');
     await expect.poll(async () => {
         const row = Number(await canvas.getAttribute('data-horsemaster-row'));
         const lives = Number(await canvas.getAttribute('data-horsemaster-lives'));
@@ -1500,12 +1543,17 @@ test('Zapper rerolls its alien shift and supports touch lanes, filling, sliding,
     await expect(canvas).toHaveAttribute('data-zapper-help-open', 'false');
     expect(Number(await canvas.getAttribute('data-zapper-quota'))).toBeGreaterThanOrEqual(10);
 
-    await tapGamePoint(page, 143, 610);
+    const deck = page.locator('#control-deck');
+    await expect(deck).toHaveAttribute('data-scheme', 'zapper');
+    // A lane game narrows the pad, so the unused arrows are hidden entirely.
+    await expect(deck).toHaveAttribute('data-stick', 'vertical');
+    await expect(page.locator('.move-btn[data-direction="left"]')).toBeHidden();
+    await pressDeckDirection(page, 'down');
     await expect(canvas).toHaveAttribute('data-zapper-lane', '1');
 
-    await holdGamePoint(page, 307, 610, 1_600);
+    await holdDeckButton(page, 'fill', 1_600);
     await expect(canvas).toHaveAttribute('data-zapper-ready', 'true');
-    await tapGamePoint(page, 548, 610);
+    await pressDeckButton(page, 'slide');
     await expect(canvas).toHaveAttribute('data-zapper-ready', 'false');
 
     const firstSignature = await canvas.getAttribute('data-zapper-course-signature');
@@ -1518,7 +1566,7 @@ test('Zapper rerolls its alien shift and supports touch lanes, filling, sliding,
         .not.toBe(firstSignature);
 });
 
-test('Casino Heist starts unarmed, drives continuously, and rerolls its getaway road', async ({
+test('Casino Heist drives away from the casino in two axes and rerolls its road', async ({
     page
 }) => {
     await installSave(page, createObjectiveSave(
@@ -1537,8 +1585,10 @@ test('Casino Heist starts unarmed, drives continuously, and rerolls its getaway 
     await tapGamePoint(page, 336, 510);
     await expect(canvas).toHaveAttribute('data-heist-help-open', 'false');
 
+    const deck = page.locator('#control-deck');
+    await expect(deck).toHaveAttribute('data-scheme', 'casino-heist');
     const startingX = Number(await canvas.getAttribute('data-heist-x'));
-    await holdGamePoint(page, 224, 616, 220);
+    await holdDeckDirection(page, 'right', 220);
     await expect.poll(async () =>
         Number(await canvas.getAttribute('data-heist-x'))
     ).toBeGreaterThan(startingX);
@@ -1547,6 +1597,20 @@ test('Casino Heist starts unarmed, drives continuously, and rerolls its getaway 
     ).toBeGreaterThan(0);
     expect(Number(await canvas.getAttribute('data-heist-max-health')))
         .toBeGreaterThanOrEqual(3);
+
+    // Up and down the road is a real axis now, not just left and right.
+    const levelScreenY = Number(await canvas.getAttribute('data-heist-screen-y'));
+    await holdDeckDirection(page, 'up', 260);
+    await expect.poll(async () =>
+        Number(await canvas.getAttribute('data-heist-screen-y'))
+    ).toBeLessThan(levelScreenY);
+
+    // The escape ends at a storm drain, so nothing reports a casino finish.
+    await expect(canvas).toHaveAttribute('data-heist-turnoff-visible', 'false');
+    await expect(canvas).toHaveAttribute('data-heist-armed-device', /oil-slick|smoke-screen|flamethrower/);
+    await expect(canvas).toHaveAttribute('data-heist-device-charges', /oil-slick:\d/);
+    expect(Number(await canvas.getAttribute('data-heist-active-traffic')))
+        .toBeGreaterThan(0);
 
     const firstSignature = await canvas.getAttribute('data-heist-course-signature');
     await tapGamePoint(page, 42, 20);

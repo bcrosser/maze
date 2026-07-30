@@ -1,12 +1,15 @@
 import {
+    MAX_BACKPACK_CAPACITY,
     STARTING_MONEY,
     type CampaignState,
     type PlayerProgress
 } from '../campaign/campaign-state';
+import {getCampaignLevelNumber} from '../campaign/level-progression';
 import {
     ITEM_DEFINITIONS,
     type ItemAffixId,
     type ItemChoiceId,
+    type ItemDefinition,
     type ItemInstance,
     type ItemQuality,
     type ItemTypeId
@@ -30,9 +33,43 @@ export const SHOP_OFFER_IDS = [
     'getaway-car',
     'reinforced-heart',
     'drill-servo',
-    'tool-capacitor'
+    'tool-capacitor',
+    'expedition-pack',
+    'slick-tank',
+    'smoke-launcher',
+    'flame-nozzle'
 ] as const;
 export type ShopOfferId = (typeof SHOP_OFFER_IDS)[number];
+
+/** Money paid per unit of salvage sold at a shop counter. */
+export const SCRAP_SALE_VALUE = 2;
+/** Backpack slots added by one Expedition Pack purchase. */
+export const BACKPACK_EXPANSION_SLOTS = 2;
+const BACKPACK_EXPANSION_BASE_PRICE = 60;
+const BACKPACK_EXPANSION_PREFIX = 'shop/expedition-pack/';
+
+/**
+ * Deeper levels pay far more, so their goods cost more too. Prices rise by 30%
+ * of the base price per level, which keeps early shops affordable while making
+ * a late-game visit a real decision.
+ */
+export function getLevelPriceMultiplier(levelNumber: number): number {
+    if (!Number.isSafeInteger(levelNumber) || levelNumber < 1) {
+        throw new Error('Level number must be a positive safe integer.');
+    }
+    return 1 + 0.3 * (levelNumber - 1);
+}
+
+/** Backpack expansions get steeply more expensive with each one owned. */
+export function getBackpackExpansionCount(player: PlayerProgress): number {
+    return player.installedModuleIds.filter(id =>
+        id.startsWith(BACKPACK_EXPANSION_PREFIX)
+    ).length;
+}
+
+export function getBackpackExpansionPrice(player: PlayerProgress): number {
+    return BACKPACK_EXPANSION_BASE_PRICE * 2 ** getBackpackExpansionCount(player);
+}
 
 export interface ShopItemTemplate {
     readonly baseTypeId: ItemTypeId;
@@ -58,7 +95,9 @@ export interface ShopItemOffer extends ShopOfferBase {
 export type ShopUpgradeEffect =
     | 'max-health'
     | 'mining-power'
-    | 'tool-charge';
+    | 'tool-charge'
+    | 'backpack-capacity'
+    | 'car-module';
 
 export interface ShopUpgradeOffer extends ShopOfferBase {
     readonly kind: 'upgrade';
@@ -190,6 +229,44 @@ export const SHOP_CATALOG: readonly ShopOffer[] = Object.freeze([
         price: 28,
         upgradeId: 'shop/tool-capacitor',
         effect: 'tool-charge'
+    }),
+    Object.freeze({
+        id: 'expedition-pack',
+        kind: 'upgrade',
+        label: 'Expedition Pack',
+        description:
+            `Permanently adds ${BACKPACK_EXPANSION_SLOTS} backpack slots. ` +
+            'Each pack costs twice the last.',
+        price: BACKPACK_EXPANSION_BASE_PRICE,
+        upgradeId: `${BACKPACK_EXPANSION_PREFIX}1`,
+        effect: 'backpack-capacity'
+    }),
+    Object.freeze({
+        id: 'slick-tank',
+        kind: 'upgrade',
+        label: 'Oil Slick Tank',
+        description: 'Fits the Getaway Car with a rear oil slick that spins out pursuers.',
+        price: 70,
+        upgradeId: 'shop/car/oil-slick',
+        effect: 'car-module'
+    }),
+    Object.freeze({
+        id: 'smoke-launcher',
+        kind: 'upgrade',
+        label: 'Smoke Launcher',
+        description: 'Fits a smoke screen that blinds pursuing cars until they peel away.',
+        price: 85,
+        upgradeId: 'shop/car/smoke-screen',
+        effect: 'car-module'
+    }),
+    Object.freeze({
+        id: 'flame-nozzle',
+        kind: 'upgrade',
+        label: 'Flame Nozzle',
+        description: 'Fits a side flamethrower that stops enemy fire and wrecks close pursuers.',
+        price: 95,
+        upgradeId: 'shop/car/flamethrower',
+        effect: 'car-module'
     })
 ] satisfies readonly ShopOffer[]);
 
@@ -256,6 +333,117 @@ export function getShopOffer(id: string): ShopOffer | null {
 
 export function getShopPrice(id: string): number | null {
     return getShopOffer(id)?.price ?? null;
+}
+
+/**
+ * The price a shop actually charges: the base price scaled by level, except the
+ * Getaway Car, whose exact `$100` cost the campaign documents and tests, and
+ * the Expedition Pack, whose price doubles per pack already owned.
+ */
+export function getShopOfferPrice(state: CampaignState, offerId: string): number | null {
+    const offer = getShopOffer(offerId);
+    if (!offer) return null;
+    if (offer.kind === 'item' && offer.item.baseTypeId === 'car') return offer.price;
+    if (offer.kind === 'upgrade' && offer.effect === 'backpack-capacity') {
+        return getBackpackExpansionPrice(state.player);
+    }
+    return Math.round(offer.price * getLevelPriceMultiplier(getCampaignLevelNumber(state)));
+}
+
+/** The upgrade id a purchase installs, which for stacking packs is ordinal. */
+function resolveUpgradeId(player: PlayerProgress, offer: ShopUpgradeOffer): string {
+    if (offer.effect !== 'backpack-capacity') return offer.upgradeId;
+    return `${BACKPACK_EXPANSION_PREFIX}${getBackpackExpansionCount(player) + 1}`;
+}
+
+/** Salvage is only worth money once a shop will buy it. */
+export function getScrapSaleValue(scrap: number): number {
+    if (!Number.isSafeInteger(scrap) || scrap < 0) {
+        throw new Error('Scrap amount must be a non-negative safe integer.');
+    }
+    return scrap * SCRAP_SALE_VALUE;
+}
+
+export type ScrapSaleResult =
+    | {readonly ok: true; readonly state: CampaignState; readonly paid: number}
+    | {readonly ok: false; readonly state: CampaignState; readonly reason: 'no-scrap'};
+
+export function sellScrap(state: CampaignState, amount: number): ScrapSaleResult {
+    if (!Number.isSafeInteger(amount) || amount <= 0) {
+        throw new Error('Scrap sale amount must be a positive safe integer.');
+    }
+    if (state.player.scrap < amount) {
+        return {ok: false, state, reason: 'no-scrap'};
+    }
+    const paid = getScrapSaleValue(amount);
+    return {
+        ok: true,
+        paid,
+        state: creditMoney(
+            {...state, player: {...state.player, scrap: state.player.scrap - amount}},
+            paid
+        )
+    };
+}
+
+/**
+ * What a shop pays for a carried item. Quality and weapon damage drive the
+ * value, and a stack sells whole so the backpack slot is actually freed.
+ */
+export function getItemSaleValue(instance: ItemInstance): number {
+    const definition: ItemDefinition = ITEM_DEFINITIONS[instance.baseTypeId];
+    const qualityValue = instance.quality === 'rare'
+        ? 12
+        : instance.quality === 'uncommon' ? 7 : 4;
+    const damageValue = 'baseDamage' in definition ? (definition.baseDamage ?? 0) * 2 : 0;
+    const affixValue = instance.affixIds.length * 3;
+    return (qualityValue + damageValue + affixValue) * Math.max(1, instance.quantity);
+}
+
+export type ItemSaleFailureReason = 'unknown-item' | 'quick-slot-item';
+
+export type ItemSaleResult =
+    | {
+        readonly ok: true;
+        readonly state: CampaignState;
+        readonly paid: number;
+        readonly item: ItemInstance;
+    }
+    | {
+        readonly ok: false;
+        readonly state: CampaignState;
+        readonly reason: ItemSaleFailureReason;
+    };
+
+/**
+ * Sells one backpack stack. A quick-slotted item is refused rather than silently
+ * unassigned, because losing a mapped healing potion mid-run is a nasty
+ * surprise.
+ */
+export function sellBackpackItem(state: CampaignState, itemId: string): ItemSaleResult {
+    const item = state.player.backpack.find(candidate => candidate.id === itemId);
+    if (!item) return {ok: false, state, reason: 'unknown-item'};
+    if (state.player.quickSlotItemIds.includes(itemId)) {
+        return {ok: false, state, reason: 'quick-slot-item'};
+    }
+    const paid = getItemSaleValue(item);
+    return {
+        ok: true,
+        paid,
+        item,
+        state: creditMoney(
+            {
+                ...state,
+                player: {
+                    ...state.player,
+                    backpack: state.player.backpack.filter(candidate =>
+                        candidate.id !== itemId
+                    )
+                }
+            },
+            paid
+        )
+    };
 }
 
 export function creditMoney(state: CampaignState, amount: number): CampaignState {
@@ -352,7 +540,7 @@ function addPurchasedItem(
             }
         };
     }
-    if (player.backpack.length >= 8) return null;
+    if (player.backpack.length >= player.backpackCapacity) return null;
     const instance: ItemInstance = {id: itemId, ...item};
     return {
         itemId,
@@ -385,9 +573,22 @@ function applyUpgrade(
     player: PlayerProgress,
     offer: ShopUpgradeOffer
 ): PlayerProgress | 'already-owned' | 'upgrade-at-cap' {
-    if (player.installedModuleIds.includes(offer.upgradeId)) return 'already-owned';
-    const installedModuleIds = [...player.installedModuleIds, offer.upgradeId];
+    const upgradeId = resolveUpgradeId(player, offer);
+    if (player.installedModuleIds.includes(upgradeId)) return 'already-owned';
+    const installedModuleIds = [...player.installedModuleIds, upgradeId];
     switch (offer.effect) {
+        case 'backpack-capacity':
+            if (player.backpackCapacity >= MAX_BACKPACK_CAPACITY) return 'upgrade-at-cap';
+            return {
+                ...player,
+                backpackCapacity: Math.min(
+                    MAX_BACKPACK_CAPACITY,
+                    player.backpackCapacity + BACKPACK_EXPANSION_SLOTS
+                ),
+                installedModuleIds
+            };
+        case 'car-module':
+            return {...player, installedModuleIds};
         case 'max-health':
             if (player.maxHealth >= 99) return 'upgrade-at-cap';
             return {
@@ -426,7 +627,8 @@ export function purchaseShopOffer(
     ) {
         return {ok: false, state, offer, reason: 'already-owned'};
     }
-    if (state.player.money < offer.price) {
+    const price = getShopOfferPrice(state, offer.id) ?? offer.price;
+    if (state.player.money < price) {
         return {ok: false, state, offer, reason: 'insufficient-funds'};
     }
 
@@ -454,7 +656,7 @@ export function purchaseShopOffer(
         purchasedItemId,
         state: {
             ...state,
-            player: {...player, money: player.money - offer.price},
+            player: {...player, money: player.money - price},
             flags:
                 offer.kind === 'item' &&
                 offer.item.baseTypeId === 'car' &&

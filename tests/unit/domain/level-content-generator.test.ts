@@ -246,24 +246,35 @@ describe('initializeLevelContent', () => {
             }
         };
 
+        // Level 11 at tier 5 carries a +10 level term on top of the tier step,
+        // so a deep floor is materially more dangerous than a shallow one.
         expect(getNativeLevelContentBudgets(alerted, 'story')).toEqual({
             lootSlots: 8,
-            monsterThreat: 13,
+            monsterThreat: 20,
             monsterEntities: 10,
             trapCost: 6
         });
         expect(getNativeLevelContentBudgets(alerted, 'standard')).toEqual({
             lootSlots: 8,
-            monsterThreat: 17,
+            monsterThreat: 27,
             monsterEntities: 10,
             trapCost: 7
         });
         expect(getNativeLevelContentBudgets(alerted, 'expert')).toEqual({
             lootSlots: 8,
-            monsterThreat: 20,
+            monsterThreat: 32,
             monsterEntities: 10,
             trapCost: 8
         });
+    });
+
+    it('raises the monster threat budget on every deeper level', () => {
+        const thresholds = [1, 2, 4, 6, 8].map(levelNumber =>
+            getNativeLevelContentBudgets(campaign(7, `level-${levelNumber}`)).monsterThreat
+        );
+        for (let index = 1; index < thresholds.length; index++) {
+            expect(thresholds[index]!).toBeGreaterThan(thresholds[index - 1]!);
+        }
     });
 
     it('validates reachability, collisions, safe radii, and minimum entity counts', () => {

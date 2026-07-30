@@ -1,8 +1,9 @@
 import Phaser from 'phaser';
 
 import type {GameShell} from './game-shell';
-import {updatePhaserEncounter, updatePhaserHud} from './game-shell';
-import {installOverworldControlDeck} from './overworld-control-deck';
+import {getQuickSlotViews, updatePhaserEncounter, updatePhaserHud} from './game-shell';
+import {installControlDeck} from './control-deck';
+import {provideControlDeck} from './control-deck-host';
 import type {CampaignState} from '../domain/campaign/campaign-state';
 import {BlackjackScene} from '../minigames/casino/blackjack.scene';
 import {HoldemScene} from '../minigames/casino/holdem.scene';
@@ -34,11 +35,7 @@ export function createMazeGame(
     shell: GameShell,
     options: CreateMazeGameOptions
 ): Phaser.Game {
-    const controlDeck = installOverworldControlDeck(
-        shell.controlDeck,
-        control => scene.performControl(control),
-        () => shell.menuButton.click()
-    );
+    const controlDeck = installControlDeck(shell.controlDeck);
     // `scene` is only reached from callbacks that run after construction.
     const scene = new OverworldScene({
         seed: options.initialCampaign?.campaignSeed ?? options.campaignSeed,
@@ -48,11 +45,17 @@ export function createMazeGame(
         ...(options.initialCampaign ? {initialCampaign: options.initialCampaign} : {}),
         onStateChanged: (state, event) => {
             updatePhaserHud(shell, state, event);
-            controlDeck.setAttackTargeting(scene.attackTargetingActive);
+            controlDeck.setButtonState('attack', {pressed: scene.attackTargetingActive});
+            controlDeck.setQuickSlots(getQuickSlotViews(state));
             options.onCampaignChanged?.(state);
         },
-        onEncounterChanged: kind => updatePhaserEncounter(shell, kind)
+        onEncounterChanged: kind => updatePhaserEncounter(shell, kind),
+        onMenuRequested: () => shell.menuButton.click()
     });
+    const cycleObjective = (): void => scene.performControl({kind: 'cycle-objective'});
+    const openMazeHelp = (): void => scene.showMazeHelp();
+    shell.objectiveCycle.addEventListener('click', cycleObjective);
+    shell.mazeHelp.addEventListener('click', openMazeHelp);
 
     const game = new Phaser.Game({
         type: Phaser.WEBGL,
@@ -92,6 +95,11 @@ export function createMazeGame(
         }
     });
 
-    game.events.once('destroy', () => controlDeck.destroy());
+    provideControlDeck(game, controlDeck);
+    game.events.once('destroy', () => {
+        shell.objectiveCycle.removeEventListener('click', cycleObjective);
+        shell.mazeHelp.removeEventListener('click', openMazeHelp);
+        controlDeck.destroy();
+    });
     return game;
 }

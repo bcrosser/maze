@@ -1,5 +1,7 @@
 import Phaser from 'phaser';
 
+import {getControlDeck} from '../../app/control-deck-host';
+import {SAFE_DIAL_CONTROL_SCHEME, type ControlEvent} from '../../app/control-scheme';
 import {Mulberry32Random} from '../../domain/random/random-source';
 import type {EncounterContext, EncounterResult, OutcomeEffect} from '../../encounters/contracts';
 import {
@@ -347,14 +349,38 @@ export class SafeDialScene extends Phaser.Scene {
         }).setOrigin(0.5);
     }
 
+    /** Dragging the dial stays in the canvas; the deck adds stepped clicks. */
+    private readonly handleControlEvent = (event: ControlEvent): void => {
+        if (this.helpOpen) {
+            if (event.kind === 'button' && event.phase === 'press') this.hideHelp(true);
+            return;
+        }
+        if (!this.canInteract()) return;
+        if (event.kind === 'direction') {
+            if (event.phase !== 'press') return;
+            const clicks = event.direction === 'left'
+                ? -1
+                : event.direction === 'right'
+                    ? 1
+                    : event.direction === 'up' ? 5 : -5;
+            this.turnDial(clicks);
+            return;
+        }
+        if (event.kind !== 'button' || event.phase !== 'press') return;
+        if (event.id === 'set') this.tryCurrentGate();
+        if (event.id === 'handle') this.tryPullHandle();
+    };
+
     private bindInput(): void {
         this.input.keyboard?.on('keydown', this.handleKeyDown, this);
         this.input.on('pointermove', this.handlePointerMove, this);
         this.input.on('pointerup', this.handlePointerUp, this);
+        getControlDeck(this)?.setScheme(SAFE_DIAL_CONTROL_SCHEME, this.handleControlEvent);
         this.events.once('shutdown', () => {
             this.input.keyboard?.off('keydown', this.handleKeyDown, this);
             this.input.off('pointermove', this.handlePointerMove, this);
             this.input.off('pointerup', this.handlePointerUp, this);
+            getControlDeck(this)?.clearScheme(SAFE_DIAL_CONTROL_SCHEME.id);
             delete this.game.canvas.dataset.dialFeedback;
             delete this.game.canvas.dataset.dialStatus;
             delete this.game.canvas.dataset.dialPosition;

@@ -1,6 +1,9 @@
 import Phaser from 'phaser';
 
+import {getControlDeck} from '../../app/control-deck-host';
+import {PIPE_CONTROL_SCHEME, type ControlEvent} from '../../app/control-scheme';
 import type {PerformanceGrade} from '../../domain/campaign/campaign-state';
+import type {DirectionId} from '../../domain/overworld/move-player';
 import {Mulberry32Random} from '../../domain/random/random-source';
 import type {EncounterContext, EncounterResult, OutcomeEffect} from '../../encounters/contracts';
 import {
@@ -272,8 +275,10 @@ export class PipeDreamScene extends Phaser.Scene {
                 this.keyboardReady = true;
             });
         }
+        getControlDeck(this)?.setScheme(PIPE_CONTROL_SCHEME, this.handleControlEvent);
         this.events.once('shutdown', () => {
             this.input.keyboard?.off('keydown', this.handleKeyDown, this);
+            getControlDeck(this)?.clearScheme(PIPE_CONTROL_SCHEME.id);
             this.queueTexts = [];
             delete this.game.canvas.dataset.pipeTurns;
             delete this.game.canvas.dataset.pipeSelectedTile;
@@ -354,6 +359,39 @@ export class PipeDreamScene extends Phaser.Scene {
         return this.state.tiles.findIndex(tile => tile.kind === 'empty');
     }
 
+    /** Moves the placement cursor one cell, clamped to the board. */
+    private moveCursor(direction: DirectionId): void {
+        const selectedX = this.selectedTileIndex % this.state.width;
+        const selectedY = Math.floor(this.selectedTileIndex / this.state.width);
+        const nextX = Phaser.Math.Clamp(
+            selectedX + (direction === 'left' ? -1 : direction === 'right' ? 1 : 0),
+            0,
+            this.state.width - 1
+        );
+        const nextY = Phaser.Math.Clamp(
+            selectedY + (direction === 'up' ? -1 : direction === 'down' ? 1 : 0),
+            0,
+            this.state.height - 1
+        );
+        this.selectedTileIndex = nextY * this.state.width + nextX;
+        this.draw();
+    }
+
+    private readonly handleControlEvent = (event: ControlEvent): void => {
+        if (this.finishing) return;
+        if (this.helpPage >= 0) {
+            if (event.kind === 'button' && event.phase === 'press') this.advanceHelp();
+            return;
+        }
+        if (event.kind === 'direction') {
+            if (event.phase === 'press') this.moveCursor(event.direction);
+            return;
+        }
+        if (event.kind !== 'button' || event.phase !== 'press') return;
+        if (event.id === 'place') this.placeAt(this.selectedTileIndex);
+        if (event.id === 'finish') this.lockPlacementAndAccelerate();
+    };
+
     private readonly handleKeyDown = (event: KeyboardEvent): void => {
         if (!this.keyboardReady) return;
         if (event.key === 'Escape') {
@@ -384,20 +422,15 @@ export class PipeDreamScene extends Phaser.Scene {
         }
         if (this.helpPage >= 0) return;
 
-        const selectedX = this.selectedTileIndex % this.state.width;
-        const selectedY = Math.floor(this.selectedTileIndex / this.state.width);
-        let nextX = selectedX;
-        let nextY = selectedY;
-        if (event.key === 'ArrowUp') nextY--;
-        else if (event.key === 'ArrowDown') nextY++;
-        else if (event.key === 'ArrowLeft') nextX--;
-        else if (event.key === 'ArrowRight') nextX++;
-        else return;
-
-        nextX = Phaser.Math.Clamp(nextX, 0, this.state.width - 1);
-        nextY = Phaser.Math.Clamp(nextY, 0, this.state.height - 1);
-        this.selectedTileIndex = nextY * this.state.width + nextX;
-        this.draw();
+        const direction = event.key === 'ArrowUp'
+            ? 'up'
+            : event.key === 'ArrowDown'
+                ? 'down'
+                : event.key === 'ArrowLeft'
+                    ? 'left'
+                    : event.key === 'ArrowRight' ? 'right' : null;
+        if (direction === null) return;
+        this.moveCursor(direction);
         event.preventDefault();
     };
 

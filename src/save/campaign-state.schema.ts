@@ -1,9 +1,11 @@
 import {z} from 'zod';
 
 import {
+    BASE_BACKPACK_CAPACITY,
     CAMPAIGN_SCHEMA_VERSION,
     ENCOUNTER_KINDS,
     ENCOUNTER_STATUSES,
+    MAX_BACKPACK_CAPACITY,
     OVERWORLD_CONTENT_GENERATOR_ID,
     PERFORMANCE_GRADES,
     TRIGGER_STATES,
@@ -208,7 +210,10 @@ const playerSchema = z.object({
     miningPower: nonNegativeSafeInteger.max(4),
     toolCharge: nonNegativeSafeInteger.max(999),
     installedModuleIds: z.array(z.string().min(1)),
-    backpack: z.array(itemInstanceSchema).max(8),
+    backpackCapacity: nonNegativeSafeInteger
+        .min(BASE_BACKPACK_CAPACITY)
+        .max(MAX_BACKPACK_CAPACITY),
+    backpack: z.array(itemInstanceSchema).max(MAX_BACKPACK_CAPACITY),
     equippedWeapon: itemInstanceSchema.nullable(),
     equippedUtility: itemInstanceSchema.nullable(),
     bowAmmo: z.number().int().min(0).max(16),
@@ -222,6 +227,9 @@ const playerSchema = z.object({
 }).strict().refine(player => player.health <= player.maxHealth, {
     message: 'Player health cannot exceed maximum health.',
     path: ['health']
+}).refine(player => player.backpack.length <= player.backpackCapacity, {
+    message: 'Backpack contents cannot exceed the purchased capacity.',
+    path: ['backpack']
 });
 
 const objectiveSchema = z.object({
@@ -292,6 +300,7 @@ export const campaignStateSchema: z.ZodType<CampaignState> = z.object({
         traps: z.array(trapSchema),
         pendingHazards: z.array(pendingHazardSchema),
         objectives: z.array(objectiveSchema).max(MAX_LEVEL_OBJECTIVE_COUNT),
+        selectedObjectiveId: z.enum(OBJECTIVE_IDS).nullable(),
         serviceSites: z.array(serviceSiteSchema).max(SERVICE_SITE_KINDS.length),
         pipeShortcutWall: coordinateSchema.nullable(),
         sanctuaryPosition: coordinateSchema,
@@ -497,6 +506,18 @@ export const campaignStateSchema: z.ZodType<CampaignState> = z.object({
                 message: 'Objectives cannot occupy the maze spawn or exit.'
             });
         }
+    }
+    if (
+        overworld.selectedObjectiveId !== null &&
+        !overworld.objectives.some(objective =>
+            objective.objectiveId === overworld.selectedObjectiveId
+        )
+    ) {
+        context.addIssue({
+            code: 'custom',
+            path: ['overworld', 'selectedObjectiveId'],
+            message: 'A tracked objective must be one of this level\'s placements.'
+        });
     }
     for (const definition of OBJECTIVE_DEFINITIONS) {
         if (Object.hasOwn(overworld.triggerStates, definition.triggerId)) {

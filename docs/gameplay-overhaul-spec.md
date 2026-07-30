@@ -189,7 +189,12 @@ The same rule applies independently to `overworld-content-v1`. Adding a registry
 
 On first entry to a newly created level, show a short `GENERATING MAZE · WILSON v1` state while the new level is prepared. A 300–700 ms reveal of carved cells is desirable, but it must be skippable and respect reduced-motion settings. A resume from save must not replay generation or change the maze.
 
-### 5.4 Save and campaign schema version 2
+### 5.4 Save and campaign schema
+
+The schema described here was introduced as version 2. The current format is version 5,
+which adds `player.backpackCapacity` (base 8, purchasable up to 24) and
+`overworld.selectedObjectiveId`. Older saves migrate forward; see §14 for the migration
+requirements.
 
 Add the following level data:
 
@@ -861,17 +866,37 @@ affix registries, and pure overworld reducer behavior. `ITEM_SPRITES` and
 `MONSTER_SPRITES` are the only numeric frame maps. Validate both existing atlases
 as 320×160 RGBA, 50 32×32 frames, with every active semantic ID mapped in range.
 
-Overworld HUD adds money, weapon/damage, utility/charges, backpack quick slots, health, statuses, turn, and nearby hostile intents. Tap/click a visible monster, trap, item, service, or material region for a readable inspect card. State is communicated with icon, label, and shape—not color alone.
+Overworld HUD adds money, weapon damage/reach/ammo, utility/charges, three tappable
+backpack quick slots, health, statuses, turn, and nearby hostile intents. Mining shows
+both power and remaining charges. The tracked objective is the nearest available one and
+carries a `↻` control that retargets it; the choice persists in
+`overworld.selectedObjectiveId`. Tap/click a visible monster, trap, item, service, or
+wall for a readable inspect card — a wall reports its material, tags, hardness, and
+whether the current pick can cut it. A HUD `?` opens a paged legend built from the live
+item, monster, and material registries. State is communicated with icon, label, and
+shape—not color alone.
 
 Keyboard/touch parity:
 
-- movement remains arrows/WASD/D-pad;
+- movement remains arrows/WASD/pad;
 - `F`/`ATTACK` enters targeting;
-- `Q`/`USE` activates the selected quick slot;
+- `1`–`3` and the three quick-slot buttons activate assigned items;
 - `E`/`INTERACT` picks up, disarms, opens a sanctuary, shops, or optional card tables;
 - `I`/`INVENTORY` opens the turn-frozen backpack;
+- `H`/`?` opens the legend;
 - `.`/`WAIT` spends a turn;
-- every contextual touch control is at least 44×44 CSS px and targeting has a visible Cancel action.
+- every contextual touch control is at least 44×44 CSS px (32 px on viewports under
+  640 px tall, where the deck's fixed height cannot hold three 44 px rows) and
+  targeting has a visible Cancel action.
+
+All scenes share one DOM control deck. A scene declares a `ControlScheme`
+(`src/app/control-scheme.ts`): a stick mode (`four-way-step`, `analog`, `vertical`,
+`horizontal`, `none`), an optional quick-slot row, and one to six buttons. The deck
+renders exactly those buttons, so a two-button game fills the row rather than showing
+dead controls, and the overworld keeps the `#control-attack`/`#control-interact`/
+`#control-wait`/`#control-inventory` element ids the acceptance tests drive. Only
+positional affordances stay in the canvas: pipe cells, circuit chips, lock pins and
+tension, the safe dial, the Space drag-to-fly region, and the corner EXIT/HELP buttons.
 
 ### 6.14 Passive maze-item minigame bonuses
 
@@ -1429,6 +1454,18 @@ Platform data stores both a visual `materialId` and an explicit behavioral `surf
 | Bounce | crystal | Applies a -560 px/s vertical impulse on landing |
 | Powered lift | conductive/elemental | Travels at 80 px/s between declared endpoints, pauses 350 ms at each endpoint, carries riders, and stops rather than crushing them |
 
+Every surface must be identifiable from its drawing, not only from its colour: ice carries a
+sheen band, facet cracks, and icicles; a bounce plate shows its coil springs; a crumbling
+floor shakes harder and sheds dust from its underside the longer it is stood on, before it
+gives way. Enemies are drawn as creatures — walking legs, beating wings, coiled haunches,
+shelled crawlers — rather than as coloured blocks, and every collectible carries a name tag.
+
+Holding Down on a raised platform drops through it for a short window
+(`dropThroughMs`), so a pickup under an overhang is always recoverable; the ground itself
+can never be dropped through. Middle sections also carry two or three optional upper
+tiers arranged as a zig-zag staircase, each tread one jump above and across from the last,
+which adds real vertical platforming without touching the certified ground route.
+
 The first generated level uses Normal plus one special surface. Later tiers introduce at most one unfamiliar behavior at a time, with a safe demonstration before its first hazardous use. Standard levels use two or three surface behaviors; requiring three special behaviors in every level would overload the opening level.
 
 Campaign benefits create alternate routes rather than deleting the challenge:
@@ -1543,15 +1580,52 @@ Zapper is a four-lane, seeded service game inspired by the timing loop of classi
 
 The technician assembles the weapon and returns it along the same lane. The player must be in that lane to catch it, then press the same action again to hand it to the waiting customer. Sending an unfilled gun, serving the wrong lane, missing a return, or allowing an alien to reach the desk costs a life. The default shift requires 12 completed orders and allows three broken orders. The schedule is fixed-step and seeded, retries generate a distinct schedule, and the production model must validate that the quota remains reachable.
 
-Touch controls expose two lane buttons, a holdable Fill button, and one context-sensitive Slide/Hand Off button, each at least 44×44 CSS px. The HUD shows quota, lives, selected lane, fill progress, active orders, and the exact active maze-item bonus.
+The shared control deck narrows to a vertical lane pad plus a holdable Fill button and one
+context-sensitive Slide/Hand Off button. Blaster slide speeds and the order cadence are
+tuned together — the guns travel briskly enough that several overlapping lanes are
+manageable — and the generated schedule always keeps the certified constructive route. The
+HUD shows quota, lives, selected lane, fill progress, active orders, and the exact active
+maze-item bonus.
 
-## 10B. Casino Heist: armed highway escape
+## 10B. Casino Heist: the getaway from the casino
 
 Casino Heist is a required roster game with an explicit overworld gate. Its marker is visible but locked until the campaign has ever acquired the Getaway Car, either as rare random maze loot or as the fixed `$100` shop offer. Acquiring the car persists `casino-heist-unlocked`; entering, failing, or completing the Heist never consumes it. A selected locked Heist forces a reachable shop onto the level so the required-objective count cannot become impossible.
 
-The attempt starts with an unarmed getaway car on a continuously scrolling road. Arrows/A/D or drag/touch provide variable horizontal steering rather than lane snapping. The player dodges road debris, barriers, and fast or slow luxury interceptors with damaging wheel spikes. Armed enemy cars fire only forward, so their aim, muzzle tell, projectile path, and safe side must be readable before damage can occur.
+The premise is the escape itself: the casino has just been robbed and the road runs away
+from it. The attempt ends at a **marked turn-off into a storm drain**. Crossing the drain
+mouth inside its width succeeds and atomically credits exactly `$1000`; driving past it
+until the road runs out fails with `missed-turnoff`, and losing the hull fails with
+`car-destroyed`. A turn-off warning fires well before the exit so it is never a surprise.
 
-Road powerups grant a gun and a small finite ammunition supply; the player begins with neither. `F`/Fire or the visible touch action spends one shot, and additional ammo pickups are required to remain armed. The route always generates enough survivable space and optional weapon opportunities, but combat is never required when a clean dodge is available. Reaching the casino exit with hull remaining succeeds and atomically credits exactly `$1000`; collision destruction or falling behind fails without a payout. The HUD shows route progress, hull, weapon/ammo state, incoming threats, and any Shield or Compass maze-item bonus.
+Driving is two-axis. Steering is continuous rather than lane-snapped, and the car also
+moves **up and down** its screen band; the screen row shifts the car's effective world
+position, so driving up genuinely closes on the traffic ahead.
+
+The road carries ordinary users — cars, buses, trucks, motorcycles — every one of them
+slower than the getaway car, plus drifting curves and occasional split carriageways with
+a solid central divider. Police pursue faster than the player: `cop-car` rams and fires
+sideways from a rolled-down window, `swat-van` is heavily armoured and rams harder. No
+vehicle passes through another: a pursuer that piles into traffic wrecks both, which is
+the main way a chase thins itself out. A ram is a **shove**, not a hit — the consequence
+comes from where the shove lands, and grinding the verge only costs hull after a
+sustained scrape. Police helicopters hold station ahead and release a partial-width spike
+strip unless they are shot down first.
+
+The car starts unarmed. Road pickups grant the pulse gun, ammunition, and three devices —
+oil slick, smoke screen, flamethrower — and maze shops sell the same devices as permanent
+car modules recorded in `player.installedModuleIds`. `Q`/Deploy spends the armed device
+once per frame, `E`/Switch arms the next stocked one. The oil slick pools behind the car
+and wrecks a pursuer that hits it; smoke blinds every trailing pursuer so they peel away;
+the flamethrower burns out a light car and swerves an armoured van.
+
+Generation is certified geometrically rather than by a scripted driver: `hasCasinoHeistDrivableCorridor`
+sweeps the road and proves that at every point there is a lateral position inside the
+tarmac, clear of the divider and of the traffic the car meets there, reachable from the
+previous point at the car's own steering speed, and that the resulting corridor reaches
+the drain mouth. Traffic is additionally never allowed to seal a distance band, and a
+spike strip may never span the road. Combat is therefore never required. The HUD shows
+route progress to the drain, hull, weapon/ammo, the armed device and its charges,
+incoming threats, and any maze-item bonus.
 
 ## 11. Cross-genre reward balance
 
@@ -1578,13 +1652,22 @@ Forbidden reward effects:
 
 Interactive controls must be at least 44×44 CSS pixels after canvas scaling. This applies to overworld Attack/Use/Interact/Wait/Inventory/targeting controls, close/help buttons, queue pieces, Lock tension controls, Space fire/bomb buttons, Platformer controls, Zapper lane/fill/action buttons, and Casino Heist steering/fire controls.
 
-If Phaser FIT scaling makes a canvas control smaller than that, enlarge the world-space hit region or use a responsive DOM control overlay. Tests must convert each Phaser hit rectangle through the live canvas scale and assert its effective CSS size; checking logical pixels alone is insufficient.
+This is now satisfied structurally: every scene's gameplay controls live in the shared DOM
+control deck rather than in the canvas, so they scale with CSS instead of with FIT. The
+remaining canvas controls are the corner EXIT/HELP buttons and the positional interactions
+listed in §6.13. Where a canvas control does remain, enlarge the world-space hit region;
+tests must convert each Phaser hit rectangle through the live canvas scale and assert its
+effective CSS size, because checking logical pixels alone is insufficient.
 
 The shell must support portrait and landscape viewports down to 320×568 CSS pixels without clipping a required control. Replace the current `78vmin` stage constraint with a layout that can use up to 96% of the available viewport width, compacts/wraps the HUD, and reserves explicit space for touch controls. The menu button also grows from 36×36 to at least 44×44 CSS pixels.
 
 At 568×320 and other viewports no more than 420 CSS px high, encounters use a rectangular landscape layout rather than shrinking the fixed square canvas: a compact one-line status strip, gameplay/board on the left, and queue/action/help controls in a right-side DOM panel. Pipe reserves at least 264×264 CSS px for its 6×6 board; Lock uses the same left/right split; Space, Platformer, Zapper, and Casino Heist use the full-width playfield with controls over safe lower corners. Required controls must fit without page scrolling. The overworld may keep its square camera with a compact overlay HUD.
 
-Space, Platformer, and Casino Heist use conventional two-thumb controls: movement on the left and at most two action buttons on the right. Required actions may never need a third simultaneous contact. The turn-based Overworld, Pipe, Lock, and Zapper remain completable with a single contact at a time.
+Space, Platformer, and Casino Heist use conventional two-thumb controls: the deck's pad on
+the left and its action buttons on the right. Space's Fire and Bomb both act on the press
+edge so a third simultaneous contact still registers, which the mobile acceptance test
+exercises directly. The turn-based Overworld, Pipe, Lock, and Zapper remain completable with
+a single contact at a time.
 
 ### 12.2 Redundant feedback
 
@@ -1739,7 +1822,7 @@ Architecture requirements:
 
 ### 14.2A Optional economy, Blackjack, and Texas Hold’em
 
-- Schema versions 1, 2, and 3 migrate to version 4 with `$40`, preserve existing campaign content, deterministically backfill service sites when needed, and initialize the saved reinforcement schedule without regenerating the current level.
+- Schema versions 1 through 4 migrate to version 5 with `$40`, preserve existing campaign content, deterministically backfill service sites when needed, initialize the saved reinforcement schedule, and default the version-5 fields (`player.backpackCapacity` to its base of 8 and `overworld.selectedObjectiveId` to `null`) without regenerating the current level.
 - Blackjack and Hold’em placements are reachable, unique, collision-free, stable across reload, and never count toward required-objective status or exit requirements.
 - A fixed 100-seed corpus includes both shop-present and shop-absent levels while always including both card tables.
 - Every monster archetype/variant/elite combination awards its exact deterministic money value once; dead monsters cannot award again after reload.

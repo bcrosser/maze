@@ -20,6 +20,7 @@ function playerWith(
         miningPower: 0,
         toolCharge: 0,
         installedModuleIds: [],
+        backpackCapacity: 8,
         backpack: backpackTypes.map((type, index) =>
             createItemInstance(`backpack-${index}`, type)
         ),

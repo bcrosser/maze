@@ -7,8 +7,11 @@ import {MAZE_GENERATOR_ID} from '../overworld/maze-generator';
 import type {Coordinate, MazeGrid} from '../overworld/maze-types';
 import {getReinforcementDelayMs} from '../overworld/reinforcement-schedule';
 
-export const CAMPAIGN_SCHEMA_VERSION = 4;
+export const CAMPAIGN_SCHEMA_VERSION = 5;
 export const STARTING_MONEY = 40;
+/** Backpack slots a fresh campaign starts with, before any shop expansion. */
+export const BASE_BACKPACK_CAPACITY = 8;
+export const MAX_BACKPACK_CAPACITY = 24;
 export const OVERWORLD_CONTENT_GENERATOR_ID = 'overworld-content-v1' as const;
 export const RESOURCE_KEYS = ['health', 'scrap', 'toolCharge'] as const;
 export const WORLD_SYSTEM_KEYS = [
@@ -60,6 +63,8 @@ export interface PlayerProgress {
     readonly miningPower: number;
     readonly toolCharge: number;
     readonly installedModuleIds: readonly string[];
+    /** Purchasable slot ceiling for `backpack`. */
+    readonly backpackCapacity: number;
     readonly backpack: readonly ItemInstance[];
     readonly equippedWeapon: ItemInstance | null;
     readonly equippedUtility: ItemInstance | null;
@@ -99,6 +104,11 @@ export interface OverworldState {
     readonly traps: readonly TrapState[];
     readonly pendingHazards: readonly PendingHazardState[];
     readonly objectives: readonly LevelObjectivePlacement[];
+    /**
+     * Objective the HUD is tracking. `null` follows the closest incomplete
+     * objective automatically; a value pins the player's own choice.
+     */
+    readonly selectedObjectiveId: ObjectiveId | null;
     readonly serviceSites: readonly LevelServicePlacement[];
     readonly pipeShortcutWall: Coordinate | null;
     readonly sanctuaryPosition: Coordinate;
@@ -182,6 +192,7 @@ export function createInitialCampaignState(options: InitialCampaignOptions): Cam
             miningPower: 0,
             toolCharge: 0,
             installedModuleIds: [],
+            backpackCapacity: BASE_BACKPACK_CAPACITY,
             backpack: [{
                 id: 'campaign/starter-potion',
                 baseTypeId: 'health-potion',
@@ -222,6 +233,7 @@ export function createInitialCampaignState(options: InitialCampaignOptions): Cam
             traps: [],
             pendingHazards: [],
             objectives: [],
+            selectedObjectiveId: null,
             serviceSites: [],
             pipeShortcutWall: null,
             sanctuaryPosition: {x: 1, y: 1},

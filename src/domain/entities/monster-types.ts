@@ -7,7 +7,15 @@ export const MONSTER_TYPE_IDS = [
     'cave-bat',
     'floating-eye',
     'mimic',
-    'stone-golem'
+    'stone-golem',
+    'giant-spider',
+    'skeleton',
+    'viper',
+    'shadow-stalker',
+    'frost-wraith',
+    'bone-knight',
+    'dragon-hatchling',
+    'maze-guardian'
 ] as const;
 export type MonsterTypeId = (typeof MONSTER_TYPE_IDS)[number];
 
@@ -27,7 +35,11 @@ export type MonsterStrategyId =
     | 'bat'
     | 'sentry'
     | 'mimic'
-    | 'golem';
+    | 'golem'
+    /** Pursues, then covers the last stretch in a double-speed leap. */
+    | 'ambusher'
+    /** Pursues at a distance and strikes down open corridors. */
+    | 'caster';
 
 export interface MonsterDefinition {
     readonly label: string;
@@ -81,9 +93,17 @@ export const MONSTER_SPRITES = Object.freeze({
     'moss-slime': 0,
     'ember-hound': 1,
     'stone-golem': 2,
+    skeleton: 4,
     'cave-bat': 6,
+    'giant-spider': 7,
+    viper: 9,
+    'frost-wraith': 11,
+    'shadow-stalker': 15,
     mimic: 26,
-    'floating-eye': 27
+    'floating-eye': 27,
+    'bone-knight': 36,
+    'dragon-hatchling': 47,
+    'maze-guardian': 49
 } as const);
 
 export const MONSTER_DEFINITIONS = Object.freeze({
@@ -180,5 +200,125 @@ export const MONSTER_DEFINITIONS = Object.freeze({
         detectionDistance: 5,
         leashDistance: 8,
         threat: 3
+    }),
+    'giant-spider': Object.freeze({
+        label: 'Giant Spider',
+        spriteId: 'giant-spider',
+        spriteFrame: MONSTER_SPRITES['giant-spider'],
+        fallbackColor: 0x6b4a7a,
+        strategyId: 'ambusher',
+        maxHealth: 3,
+        armor: 0,
+        baseDamage: 2,
+        moveEveryTurns: 2,
+        attackCooldownTurns: 2,
+        detectionDistance: 7,
+        leashDistance: 10,
+        threat: 3
+    }),
+    skeleton: Object.freeze({
+        label: 'Skeleton',
+        spriteId: 'skeleton',
+        spriteFrame: MONSTER_SPRITES.skeleton,
+        fallbackColor: 0xe5dfbd,
+        strategyId: 'pursue',
+        maxHealth: 4,
+        armor: 1,
+        baseDamage: 2,
+        moveEveryTurns: 2,
+        attackCooldownTurns: 2,
+        detectionDistance: 7,
+        leashDistance: 11,
+        threat: 3
+    }),
+    viper: Object.freeze({
+        label: 'Cave Viper',
+        spriteId: 'viper',
+        spriteFrame: MONSTER_SPRITES.viper,
+        fallbackColor: 0x4f8f3f,
+        strategyId: 'ambusher',
+        maxHealth: 3,
+        armor: 0,
+        baseDamage: 3,
+        moveEveryTurns: 1,
+        attackCooldownTurns: 3,
+        detectionDistance: 6,
+        leashDistance: 9,
+        threat: 4
+    }),
+    'shadow-stalker': Object.freeze({
+        label: 'Shadow Stalker',
+        spriteId: 'shadow-stalker',
+        spriteFrame: MONSTER_SPRITES['shadow-stalker'],
+        fallbackColor: 0x453a63,
+        strategyId: 'ambusher',
+        maxHealth: 5,
+        armor: 1,
+        baseDamage: 3,
+        moveEveryTurns: 1,
+        attackCooldownTurns: 2,
+        detectionDistance: 9,
+        leashDistance: 14,
+        threat: 5
+    }),
+    'frost-wraith': Object.freeze({
+        label: 'Frost Wraith',
+        spriteId: 'frost-wraith',
+        spriteFrame: MONSTER_SPRITES['frost-wraith'],
+        fallbackColor: 0x8fd8ea,
+        strategyId: 'caster',
+        maxHealth: 4,
+        armor: 0,
+        baseDamage: 3,
+        moveEveryTurns: 2,
+        attackCooldownTurns: 3,
+        detectionDistance: 8,
+        leashDistance: 12,
+        threat: 4
+    }),
+    'bone-knight': Object.freeze({
+        label: 'Bone Knight',
+        spriteId: 'bone-knight',
+        spriteFrame: MONSTER_SPRITES['bone-knight'],
+        fallbackColor: 0xb9b3a0,
+        strategyId: 'pursue',
+        maxHealth: 8,
+        armor: 2,
+        baseDamage: 4,
+        moveEveryTurns: 2,
+        attackCooldownTurns: 3,
+        detectionDistance: 8,
+        leashDistance: 13,
+        threat: 6
+    }),
+    'dragon-hatchling': Object.freeze({
+        label: 'Dragon Hatchling',
+        spriteId: 'dragon-hatchling',
+        spriteFrame: MONSTER_SPRITES['dragon-hatchling'],
+        fallbackColor: 0xd8562f,
+        strategyId: 'caster',
+        maxHealth: 7,
+        armor: 1,
+        baseDamage: 4,
+        moveEveryTurns: 2,
+        attackCooldownTurns: 3,
+        detectionDistance: 9,
+        leashDistance: 14,
+        threat: 7
+    }),
+    'maze-guardian': Object.freeze({
+        label: 'Maze Guardian',
+        spriteId: 'maze-guardian',
+        spriteFrame: MONSTER_SPRITES['maze-guardian'],
+        fallbackColor: 0xcf9a3a,
+        strategyId: 'golem',
+        maxHealth: 11,
+        armor: 3,
+        baseDamage: 5,
+        moveEveryTurns: 2,
+        attackCooldownTurns: 3,
+        detectionDistance: 8,
+        leashDistance: 16,
+        threat: 9
     })
 } as const satisfies Record<MonsterTypeId, MonsterDefinition>);
