@@ -6,6 +6,7 @@ import {
     OVERWORLD_CONTROL_SCHEME,
     type ControlEvent
 } from '../app/control-scheme';
+import {OVERWORLD_TUTORIAL_FLAG} from '../app/tutorial-steps';
 import {
     createInitialCampaignState,
     type ActiveEncounterRecord,
@@ -159,6 +160,8 @@ export interface OverworldSceneOptions {
     ) => void;
     /** Opens the shell's pause menu from the shared control deck. */
     readonly onMenuRequested?: () => void;
+    /** Opens the shell's first-run tour, which lives in the DOM beside the canvas. */
+    readonly onRequestTutorial?: () => void;
 }
 
 interface ObjectiveVisual {
@@ -702,6 +705,8 @@ export class OverworldScene extends Phaser.Scene {
             this.showLevelReward();
         } else if (this.campaign.activeEncounter) {
             this.time.delayedCall(0, () => this.showInterruptedEncounter());
+        } else if (!this.campaign.flags.includes(OVERWORLD_TUTORIAL_FLAG)) {
+            this.options.onRequestTutorial?.();
         }
     }
 
@@ -2615,7 +2620,8 @@ export class OverworldScene extends Phaser.Scene {
                     ammo: this.campaign.player.bowAmmo
                 })}`,
                 `Utility: ${utility ? ITEM_DEFINITIONS[utility.baseTypeId].label : 'None'}`,
-                `Money $${this.campaign.player.money}  ·  Arrows ${this.campaign.player.bowAmmo}` +
+                `$${this.campaign.player.money}  ·  Salvage ${this.campaign.player.scrap}` +
+                    `  ·  Arrows ${this.campaign.player.bowAmmo}` +
                     `  ·  Slots ${items.length}/${this.campaign.player.backpackCapacity}`,
                 '',
                 selected
@@ -2787,9 +2793,14 @@ export class OverworldScene extends Phaser.Scene {
             this.showMazeHelp((boundedPage - 1 + pages.length) % pages.length);
         const nextPage = (): void =>
             this.showMazeHelp((boundedPage + 1) % pages.length);
-        addFooterButton(-190, '◀ PREV', previousPage);
-        addFooterButton(190, 'NEXT ▶', nextPage);
-        addFooterButton(0, 'CLOSE', () => this.destroyModal());
+        addFooterButton(-216, '◀ PREV', previousPage);
+        addFooterButton(216, 'NEXT ▶', nextPage);
+        addFooterButton(-72, 'TUTORIAL', () => {
+            // Clear the modal first, or it keeps swallowing every control.
+            this.destroyModal();
+            this.options.onRequestTutorial?.();
+        });
+        addFooterButton(72, 'CLOSE', () => this.destroyModal());
 
         this.activateModal(container);
         this.modalConfirmAction = nextPage;
@@ -2848,6 +2859,16 @@ export class OverworldScene extends Phaser.Scene {
 
     private emitState(event?: OverworldEvent): void {
         this.options.onStateChanged(this.campaign, event);
+    }
+
+    /** Records that the first-run tour has been shown so it does not reopen. */
+    markOverworldTutorialSeen(): void {
+        if (this.campaign.flags.includes(OVERWORLD_TUTORIAL_FLAG)) return;
+        this.campaign = {
+            ...this.campaign,
+            flags: [...this.campaign.flags, OVERWORLD_TUTORIAL_FLAG]
+        };
+        this.emitState();
     }
 
     /**

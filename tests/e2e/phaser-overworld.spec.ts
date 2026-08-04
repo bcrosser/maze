@@ -467,6 +467,13 @@ async function startPhaser(page: Page, expectedLevelId = 'level-1'): Promise<voi
         'data-level-id',
         expectedLevelId
     );
+    // A first run opens the guided tour over the whole page. Every other spec
+    // expects the maze to be interactive the moment it loads.
+    const tutorial = page.locator('#tutorial-overlay');
+    if (await tutorial.isVisible()) {
+        await page.locator('#tutorial-skip').click();
+        await expect(tutorial).toBeHidden();
+    }
     await expect.poll(() => page.evaluate(key =>
         window.localStorage.getItem(key) !== null, SAVE_KEY
     )).toBe(true);
@@ -942,6 +949,50 @@ test('the movement pad also steers as a drag joystick', async ({page}) => {
         x: start.x + usable.offset.x,
         y: start.y + usable.offset.y
     });
+});
+
+test('guides a first-time player through the interface exactly once', async ({page}) => {
+    await page.goto('/');
+    const startButton = page.getByRole('button', {name: /Start Game|Retry/});
+    await expect(startButton).toHaveAttribute('data-app-ready', 'true');
+    await startButton.click();
+
+    const overlay = page.locator('#tutorial-overlay');
+    const progress = page.locator('#tutorial-progress');
+    const pointerLine = page.locator('#tutorial-line line');
+    await expect(overlay).toBeVisible();
+    await expect(progress).toHaveText('Step 1 of 8');
+    await expect(page.locator('#tutorial-back')).toBeDisabled();
+    // The opening card introduces itself before pointing at anything.
+    await expect(pointerLine).toHaveAttribute('visibility', 'hidden');
+
+    await page.locator('#tutorial-next').click();
+    await expect(progress).toHaveText('Step 2 of 8');
+    await expect(overlay).toHaveAttribute('data-step', 'move');
+    await expect(pointerLine).toHaveAttribute('visibility', 'visible');
+
+    await page.locator('#tutorial-back').click();
+    await expect(progress).toHaveText('Step 1 of 8');
+
+    await page.locator('#tutorial-skip').click();
+    await expect(overlay).toBeHidden();
+    await expect.poll(async () => (await readSavedState(page)).flags)
+        .toContain('tutorial-overworld-seen');
+
+    await page.reload();
+    const restartButton = page.getByRole('button', {name: /Start Game|Retry/});
+    await expect(restartButton).toHaveAttribute('data-app-ready', 'true');
+    await restartButton.click();
+    await expect(page.locator('#game-main')).toHaveAttribute('data-level-id', 'level-1');
+    await expect(overlay).toBeHidden();
+
+    // The tour stays reachable from the maze legend.
+    await page.locator('#maze-help').click();
+    await expect(page.locator('canvas[data-runtime="phaser"]'))
+        .toHaveAttribute('data-maze-help-open', 'true');
+    await tapGamePoint(page, 264, 580);
+    await expect(overlay).toBeVisible();
+    await expect(progress).toHaveText('Step 1 of 8');
 });
 
 test('overworld action deck opens inventory, attacks, and waits', async ({page}) => {

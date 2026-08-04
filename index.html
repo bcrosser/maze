@@ -486,6 +486,89 @@
             cursor: pointer;
         }
 
+        /* First-run tour. Sits above every other overlay so it can point at the
+           HUD and the control deck, which are DOM siblings of the canvas. */
+        #tutorial-overlay {
+            position: fixed;
+            inset: 0;
+            z-index: 40;
+        }
+        #tutorial-spotlight {
+            position: fixed;
+            border: 2px solid var(--accent);
+            border-radius: 6px;
+            box-shadow: 0 0 0 9999px rgba(15, 17, 14, 0.78);
+            pointer-events: none;
+        }
+        #tutorial-line {
+            position: fixed;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+        }
+        #tutorial-line line {
+            stroke: var(--accent);
+            stroke-width: 3;
+        }
+        #tutorial-line path {
+            fill: var(--accent);
+        }
+        #tutorial-card {
+            position: fixed;
+            width: min(92vw, 340px);
+            padding: 16px 18px 12px;
+            border: 1px solid var(--accent);
+            background: var(--panel);
+            box-shadow: 0 6px 24px rgba(0, 0, 0, 0.55);
+        }
+        #tutorial-progress {
+            margin: 0 0 6px;
+            color: var(--muted);
+            font-size: 0.75em;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+        #tutorial-card h2 {
+            margin: 0 0 8px;
+            color: var(--accent);
+            font-size: 1.15em;
+        }
+        #tutorial-body {
+            margin: 0 0 14px;
+            color: var(--ink);
+            font-size: 0.9em;
+            line-height: 1.45;
+        }
+        #tutorial-buttons {
+            display: flex;
+            gap: 8px;
+        }
+        #tutorial-buttons button {
+            flex: 1;
+            min-height: 40px;
+            padding: 8px 10px;
+            border: 1px solid var(--line);
+            background: var(--panel-raised);
+            color: var(--ink);
+            font-family: Georgia, 'Times New Roman', serif;
+            font-size: 0.9em;
+            cursor: pointer;
+        }
+        #tutorial-next {
+            background: var(--accent);
+            color: var(--panel);
+            font-weight: bold;
+        }
+        #tutorial-buttons button:disabled {
+            opacity: 0.4;
+            cursor: default;
+        }
+        #tutorial-buttons button:focus-visible {
+            outline: 3px solid #fff4b8;
+            outline-offset: -3px;
+        }
+
         /* Wide screens get a roomy, readable sidebar next to the maze. */
         @media (min-aspect-ratio: 4 / 3) {
             main {
@@ -571,6 +654,41 @@
         <p class="hint">Press Escape or click outside to resume.</p>
         <button id="resume-btn" type="button">Resume</button>
         <button id="restart-btn" type="button">Restart Game</button>
+    </div>
+
+    <div
+        id="tutorial-overlay"
+        class="hidden"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="tutorial-title"
+    >
+        <div id="tutorial-spotlight" aria-hidden="true"></div>
+        <svg id="tutorial-line" aria-hidden="true">
+            <defs>
+                <marker
+                    id="tutorial-arrow"
+                    markerWidth="8"
+                    markerHeight="8"
+                    refX="7"
+                    refY="4"
+                    orient="auto"
+                >
+                    <path d="M0,0 L8,4 L0,8 Z"></path>
+                </marker>
+            </defs>
+            <line visibility="hidden" marker-end="url(#tutorial-arrow)"></line>
+        </svg>
+        <div id="tutorial-card">
+            <p id="tutorial-progress"></p>
+            <h2 id="tutorial-title"></h2>
+            <p id="tutorial-body"></p>
+            <div id="tutorial-buttons">
+                <button id="tutorial-back" type="button">Back</button>
+                <button id="tutorial-next" type="button">Next</button>
+                <button id="tutorial-skip" type="button">Skip</button>
+            </div>
+        </div>
     </div>
 
     <div id="game-wrapper">

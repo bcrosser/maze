@@ -4,6 +4,8 @@ import type {GameShell} from './game-shell';
 import {getQuickSlotViews, updatePhaserEncounter, updatePhaserHud} from './game-shell';
 import {installControlDeck} from './control-deck';
 import {provideControlDeck} from './control-deck-host';
+import {startTutorialOverlay} from './tutorial-overlay';
+import {OVERWORLD_TUTORIAL_STEPS} from './tutorial-steps';
 import type {CampaignState} from '../domain/campaign/campaign-state';
 import {BlackjackScene} from '../minigames/casino/blackjack.scene';
 import {HoldemScene} from '../minigames/casino/holdem.scene';
@@ -50,7 +52,21 @@ export function createMazeGame(
             options.onCampaignChanged?.(state);
         },
         onEncounterChanged: kind => updatePhaserEncounter(shell, kind),
-        onMenuRequested: () => shell.menuButton.click()
+        onMenuRequested: () => shell.menuButton.click(),
+        onRequestTutorial: () => {
+            // The scene's own update guard keys off its input plugin, so
+            // disabling it also parks the reinforcement timer behind the tour.
+            scene.input.enabled = false;
+            if (game.input.keyboard) game.input.keyboard.enabled = false;
+            startTutorialOverlay({
+                steps: OVERWORLD_TUTORIAL_STEPS,
+                onFinished: () => {
+                    scene.input.enabled = true;
+                    if (game.input.keyboard) game.input.keyboard.enabled = true;
+                    scene.markOverworldTutorialSeen();
+                }
+            });
+        }
     });
     const cycleObjective = (): void => scene.performControl({kind: 'cycle-objective'});
     const openMazeHelp = (): void => scene.showMazeHelp();
